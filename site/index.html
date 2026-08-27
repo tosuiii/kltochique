@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EmpresaMonitor</title>
+<style>
+body{font-family:Arial,sans-serif;margin:30px;background:#f5f5f5;color:#161616}
+.wrap{max-width:1100px;margin:auto}
+.top,.card{background:#fff;padding:18px;border-radius:12px;margin-bottom:14px}
+input{padding:11px;width:320px;max-width:90%;margin-right:6px}
+button{padding:10px 14px;cursor:pointer;margin:3px}
+img{max-width:100%;border:1px solid #ccc;border-radius:9px;background:#fff}
+small{color:#666}.ok{color:#087c3e}.bad{color:#b40000}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>EmpresaMonitor — Netlify MVP</h1>
+  <div class="top">
+    <input id="token" type="password" placeholder="ADMIN_TOKEN">
+    <button onclick="saveToken()">Entrar</button>
+    <span id="status"></span>
+  </div>
+
+  <div id="list"></div>
+
+  <h2>Visualização</h2>
+  <img id="frame" alt="Selecione um computador">
+</div>
+
+<script>
+let currentId=null;
+const token=document.getElementById('token');
+const statusEl=document.getElementById('status');
+const list=document.getElementById('list');
+const frame=document.getElementById('frame');
+
+token.value=localStorage.getItem('adminToken')||'';
+
+function headers(){
+  return {'X-Admin-Token':localStorage.getItem('adminToken')||''};
+}
+
+function saveToken(){
+  localStorage.setItem('adminToken',token.value);
+  refresh();
+}
+
+async function refresh(){
+  try{
+    const r=await fetch('/api/computers',{headers:headers(),cache:'no-store'});
+
+    if(r.status===401){
+      statusEl.className='bad';
+      statusEl.textContent='Token inválido';
+      list.innerHTML='';
+      return;
+    }
+
+    if(!r.ok){
+      statusEl.className='bad';
+      statusEl.textContent='Erro '+r.status;
+      return;
+    }
+
+    statusEl.className='ok';
+    statusEl.textContent='Conectado';
+
+    const pcs=await r.json();
+
+    list.innerHTML=pcs.map(p=>`
+      <div class="card">
+        <b>${p.name}</b> — ${p.user}<br>
+        <small>${p.id}</small><br><br>
+        ${p.accessActive?'🟢 acesso ativo':p.accessRequested?'🟡 aguardando autorização':'⚪ conectado'}
+        <br><br>
+        <button onclick="requestAccess('${p.id}')">Solicitar acesso</button>
+        <button onclick="view('${p.id}')">Ver tela</button>
+        <button onclick="endAccess('${p.id}')">Encerrar</button>
+      </div>
+    `).join('');
+  }catch(e){
+    statusEl.className='bad';
+    statusEl.textContent='Falha ao carregar';
+  }
+}
+
+async function requestAccess(id){
+  await fetch(`/api/computers/${id}/request-access`,{method:'POST',headers:headers()});
+  refresh();
+}
+
+async function endAccess(id){
+  await fetch(`/api/computers/${id}/end-access`,{method:'POST',headers:headers()});
+  refresh();
+}
+
+function view(id){ currentId=id; }
+
+async function updateFrame(){
+  if(!currentId)return;
+  const r=await fetch(`/api/computers/${currentId}/frame?t=${Date.now()}`,{
+    headers:headers(),
+    cache:'no-store'
+  });
+  if(r.ok){
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const old=frame.src;
+    frame.src=url;
+    if(old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+  }
+}
+
+setInterval(updateFrame,1200);
+setInterval(refresh,3000);
+refresh();
+</script>
+</body>
+</html>
