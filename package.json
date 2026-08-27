@@ -1,9 +1,0 @@
-{
-  "name": "empresamonitor-netlify-mvp",
-  "version": "1.0.0",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@netlify/blobs": "^8.2.0"
-  }
-}
