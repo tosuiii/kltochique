@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: empresamonitor-realtime-v2
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: AGENT_KEY
+        sync: false
