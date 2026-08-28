@@ -354,10 +354,3 @@ public sealed class MainForm : Form
         var id = Guid.NewGuid().ToString("N"); File.WriteAllText(path, id); return id;
     }
 }
-
-// Classe de configuração necessária para compilação
-public static class BuildConfig
-{
-    public static string RealtimeUrl = "wss://kltochique-production.up.railway.app"; // Substitua pelo seu endpoint
-    public static string AgentKey = "tochique123"; // Substitua pela sua chave
-}
