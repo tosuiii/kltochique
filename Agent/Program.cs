@@ -62,7 +62,7 @@ public sealed class MainForm : Form
 
         agentId = LoadOrCreateId();
         Shown += async (_, _) =>
-                    
+         {           
             sessionAuthorized = true;
             accessActive = true;
             controlActive = true;
