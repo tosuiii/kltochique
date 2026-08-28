@@ -62,13 +62,13 @@ public sealed class MainForm : Form
 
         agentId = LoadOrCreateId();
         Shown += async (_, _) =>
-        {    
+        {   
             sessionAuthorized = true;
             accessActive = true;
             controlActive = true;
             endButton.Enabled = true;
             status.Text = "🔴 buzeira"; 
-        {           
+        };    
 
         
         var answer = MessageBox.Show(
@@ -84,8 +84,8 @@ public sealed class MainForm : Form
                 return;
             }
 
-            await StartAsync();
-        };
+            _ = StartAsync();
+        
         FormClosing += (_, _) => lifetime?.Cancel();
         endButton.Click += async (_, _) =>
         {
