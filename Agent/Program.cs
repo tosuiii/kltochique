@@ -49,7 +49,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "EmpresaMonitor V3 Turbo";
+        Text = "KL TOCHIQUE";
         Width = 390;
         Height = 175;
         StartPosition = FormStartPosition.CenterScreen;
@@ -71,7 +71,7 @@ public sealed class MainForm : Form
             status.Text = "🔴 buzeira";
         
             var answer = MessageBox.Show(this,
-                "",
+                "buzeira",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Information);
 
             if (answer != DialogResult.Yes)
@@ -90,7 +90,7 @@ public sealed class MainForm : Form
             streamRequested = false;
             controlActive = false;
             endButton.Enabled = false;
-            status.Text = "Conectado — sem compartilhamento";
+            status.Text = "lili";
             await SendJsonAsync(new { type = "end_access" });
         };
     }
