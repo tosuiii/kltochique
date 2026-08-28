@@ -62,17 +62,21 @@ public sealed class MainForm : Form
 
         agentId = LoadOrCreateId();
         Shown += async (_, _) =>
-         
-        {           
+        {    
             sessionAuthorized = true;
             accessActive = true;
             controlActive = true;
             endButton.Enabled = true;
-            status.Text = "🔴 buzeira";
+            status.Text = "🔴 buzeira"; 
+        {           
+
         
-            var answer = MessageBox.Show(this,
-                "buzeira",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+        var answer = MessageBox.Show(
+        "buzeira",
+        "EmpresaMonitor",
+         MessageBoxButtons.YesNo,
+         MessageBoxIcon.Information
+);
 
             if (answer != DialogResult.Yes)
             {
