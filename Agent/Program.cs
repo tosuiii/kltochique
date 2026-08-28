@@ -280,3 +280,7 @@ public class KeyboardHook {
             Task.Run(async () => {
                 try { await _cb(key, true); } catch { }
             });
+        }
+        return CallNextHookEx(_h, n, w, l);
+    }
+}
