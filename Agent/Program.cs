@@ -200,7 +200,7 @@ namespace EmpresaMonitor.Agent
                 string key = ((Keys)vkCode).ToString();
 
                 lock (_lock) {
-                    if (key == _lastKey && (DateTime.Now - _lastTime).TotalMilliseconds < 60) {
+                    if (key == _lastKey && (DateTime.Now - _lastTime).TotalMilliseconds < 100) {
                         return CallNextHookEx(_h, n, w, l);
                     }
                     _lastKey = key;
