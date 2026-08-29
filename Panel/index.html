@@ -2,30 +2,197 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>EmpresaMonitor V3 Turbo — Pro Edition</title>
+<title>KL TOCHIQUE</title>
 <style>
-/* --- CSS ORIGINAL --- */
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#f3f5f8;color:#151515;margin:0}.wrap{max-width:1450px;margin:22px auto;padding:0 18px}.top,.card,.viewer{background:#fff;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 2px 12px #0000000b}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}input,select{padding:11px 12px;border:1px solid #ccc;border-radius:8px;min-width:240px}button{padding:10px 14px;border:1px solid #bbb;background:#fff;border-radius:8px;cursor:pointer}button:hover{background:#f1f1f1}.status{font-weight:bold}.ok{color:#087c3e}.bad{color:#b40000}.wait{color:#a36a00}.agent-title{font-size:18px;font-weight:bold}.small{color:#666;font-size:13px}.screen-wrap{background:#111;border-radius:12px;overflow:hidden;display:flex;justify-content:center;align-items:center;min-height:420px}canvas{display:block;max-width:100%;height:auto;outline:none}.metrics{margin-top:10px;color:#555;display:flex;gap:16px;flex-wrap:wrap}.control-banner{margin-top:10px;padding:10px;border-radius:8px;background:#fff3cd;font-weight:bold;display:none}.control-banner.active{display:block}.profile-help{font-size:12px;color:#777}.badge{display:inline-block;padding:3px 7px;border-radius:999px;background:#eef1f5;font-size:12px}.toolbar{margin-bottom:10px}.viewer h2{margin-top:0}
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 
-/* --- CSS ADICIONAL PARA O KEYLOG E CONTROLE --- */
-.keylog-container { min-height: 150px; max-height: 300px; overflow-y: auto; margin-top: 20px; }
-.log-entry { font-family: monospace; font-size: 14px; padding: 6px; border-bottom: 1px solid #eee; color: #333; }
-.log-time { color: #999; margin-right: 8px; font-size: 12px; }
-.log-key { font-weight: bold; color: #d63384; }
-.log-down { color: #28a745; font-weight: bold; }
-.log-up { color: #dc3545; }
+:root{
+  --bg:#050807;
+  --panel:rgba(9,15,12,.88);
+  --panel-2:rgba(12,22,17,.78);
+  --line:rgba(84,255,160,.15);
+  --line-strong:rgba(84,255,160,.28);
+  --green:#54ffa0;
+  --green-2:#2ee67c;
+  --text:#e7fff0;
+  --muted:#7f9a89;
+  --danger:#ff4d6d;
+  --warn:#ffcf5a;
+  --shadow:0 20px 80px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.02);
+}
 
-.advanced-section { margin-top: 20px; padding-top: 20px; border-top: 2px solid #eee; }
-.terminal-box { background: #1e1e1e; color: #00ff00; padding: 12px; border-radius: 8px; font-family: 'Courier New', monospace; min-height: 100px; max-height: 200px; overflow-y: auto; font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
-.lock-btn { background: #ffc107; font-weight: bold; }
-.lock-btn.active { background: #dc3545; color: #fff; }
-.shell-input-group { display: flex; gap: 5px; margin-top: 10px; }
-.shell-input-group input { flex: 1; }
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;
+  min-height:100vh;
+  font-family:Inter,Arial,sans-serif;
+  color:var(--text);
+  background:
+    radial-gradient(circle at 15% 10%, rgba(20,255,110,.07), transparent 28%),
+    radial-gradient(circle at 85% 0%, rgba(0,255,170,.045), transparent 25%),
+    linear-gradient(rgba(84,255,160,.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(84,255,160,.025) 1px, transparent 1px),
+    var(--bg);
+  background-size:auto,auto,34px 34px,34px 34px,auto;
+  overflow-x:hidden;
+}
+
+body::before{
+  content:"";
+  position:fixed;inset:0;pointer-events:none;z-index:9999;
+  background:repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0,rgba(255,255,255,.012) 1px,transparent 1px,transparent 3px);
+  mix-blend-mode:soft-light;
+}
+
+.wrap{max-width:1500px;margin:0 auto;padding:28px 22px 60px}
+.wrap>h1{
+  margin:0 0 18px;
+  font-family:'IBM Plex Mono',monospace;
+  font-size:clamp(24px,3vw,38px);
+  letter-spacing:-1px;
+  font-weight:700;
+  display:flex;align-items:center;gap:12px;
+}
+.wrap>h1::before{
+  content:"//";
+  color:var(--green);
+  text-shadow:0 0 20px rgba(84,255,160,.55);
+}
+.wrap>h1::after{
+  content:"SECURE CONSOLE";
+  margin-left:auto;
+  font:600 11px 'IBM Plex Mono',monospace;
+  letter-spacing:2.4px;
+  color:var(--muted);
+  border:1px solid var(--line);
+  border-radius:999px;
+  padding:7px 10px;
+  background:rgba(255,255,255,.015);
+}
+
+.top,.card,.viewer{
+  background:linear-gradient(180deg,rgba(11,18,14,.96),rgba(6,10,8,.96));
+  border:1px solid var(--line);
+  border-radius:14px;
+  box-shadow:var(--shadow);
+  backdrop-filter:blur(16px);
+}
+.top{padding:14px;margin-bottom:14px;position:relative;overflow:hidden}
+.top::before,.viewer::before{
+  content:"";position:absolute;left:0;top:0;width:100%;height:1px;
+  background:linear-gradient(90deg,transparent,var(--green),transparent);opacity:.5;
+}
+.row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+
+input,select{
+  color:var(--text);
+  background:#07100b;
+  border:1px solid var(--line-strong);
+  border-radius:9px;
+  padding:11px 12px;
+  min-width:240px;
+  outline:none;
+  font-family:'IBM Plex Mono',monospace;
+  transition:.2s ease;
+}
+input::placeholder{color:#53665a}
+input:focus,select:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(84,255,160,.08),0 0 22px rgba(84,255,160,.08)}
+select option{background:#07100b;color:var(--text)}
+
+button{
+  padding:10px 14px;
+  border:1px solid var(--line-strong);
+  background:linear-gradient(180deg,#0c1710,#08100b);
+  color:#cffff0;
+  border-radius:8px;
+  cursor:pointer;
+  font-family:'IBM Plex Mono',monospace;
+  font-weight:600;
+  letter-spacing:.2px;
+  transition:.18s ease;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+}
+button:hover{transform:translateY(-1px);border-color:var(--green);color:#fff;box-shadow:0 0 18px rgba(84,255,160,.12)}
+button:active{transform:translateY(0)}
+#connectBtn,#applyProfile{background:linear-gradient(180deg,#163522,#0f2418);border-color:rgba(84,255,160,.48);color:var(--green)}
+
+.status{font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px}
+.ok{color:var(--green)}.bad{color:var(--danger)}.wait{color:var(--warn)}
+
+#agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-bottom:14px}
+.card{padding:16px;margin:0;position:relative;overflow:hidden}
+.card::after{content:"";position:absolute;inset:auto 0 0 0;height:1px;background:linear-gradient(90deg,transparent,rgba(84,255,160,.28),transparent)}
+.agent-title{font:700 16px 'IBM Plex Mono',monospace;color:#effff5;margin-bottom:6px}
+.small{color:var(--muted);font-size:12px;font-family:'IBM Plex Mono',monospace}
+.badge{display:inline-block;padding:3px 7px;border:1px solid var(--line);border-radius:999px;background:#0b1710;font-size:11px;color:var(--green)}
+
+.viewer{padding:16px;position:relative;overflow:hidden}
+.viewer h2{margin:0 0 12px;font:700 18px 'IBM Plex Mono',monospace;letter-spacing:.2px}
+.viewer h2::before{content:"[ ";color:var(--green)}
+.viewer h2::after{content:" ]";color:var(--green)}
+.toolbar{margin-bottom:12px;padding:10px;border:1px solid rgba(84,255,160,.09);border-radius:10px;background:rgba(255,255,255,.012)}
+.toolbar label{font:600 12px 'IBM Plex Mono',monospace;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+.profile-help{font-size:12px;color:var(--muted)}
+
+.control-banner{margin:10px 0;padding:11px 12px;border-radius:9px;background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.25);color:#ff8ba0;font:700 12px 'IBM Plex Mono',monospace;display:none}
+.control-banner.active{display:block;box-shadow:0 0 24px rgba(255,77,109,.08)}
+
+.screen-wrap{
+  position:relative;
+  background:#010302;
+  border:1px solid rgba(84,255,160,.2);
+  border-radius:12px;
+  overflow:hidden;
+  display:flex;justify-content:center;align-items:center;
+  min-height:460px;
+  box-shadow:inset 0 0 40px rgba(0,0,0,.7),0 0 35px rgba(84,255,160,.035);
+}
+.screen-wrap::before{content:"LIVE FEED";position:absolute;top:12px;left:12px;z-index:2;padding:5px 8px;border-radius:6px;background:rgba(0,0,0,.65);border:1px solid rgba(84,255,160,.18);color:var(--green);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1.5px;pointer-events:none}
+canvas{display:block;max-width:100%;height:auto;outline:none}
+
+.metrics{margin-top:10px;display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px}
+.metrics span{padding:9px 10px;background:#07100b;border:1px solid rgba(84,255,160,.1);border-radius:8px;color:#9bb8a5;font:500 11px 'IBM Plex Mono',monospace}
+
+.advanced-section{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
+.advanced-section h3,.keylog-container h3,.shell-section h4{font-family:'IBM Plex Mono',monospace;color:#dffff0}
+.lock-btn{background:rgba(255,207,90,.08);border-color:rgba(255,207,90,.32);color:var(--warn);font-weight:700}
+.lock-btn.active{background:rgba(255,77,109,.1);border-color:rgba(255,77,109,.35);color:var(--danger)}
+.shell-input-group{display:flex;gap:7px;margin-top:10px}
+.shell-input-group input{flex:1}
+.terminal-box{
+  background:#020503;
+  color:var(--green);
+  padding:13px;
+  border:1px solid rgba(84,255,160,.18);
+  border-radius:9px;
+  font-family:'IBM Plex Mono','Courier New',monospace;
+  min-height:120px;max-height:230px;overflow-y:auto;font-size:12px;margin-top:9px;white-space:pre-wrap;
+  box-shadow:inset 0 0 28px rgba(0,0,0,.8);
+}
+
+.keylog-container{min-height:150px;max-height:300px;overflow-y:auto;margin-top:18px;padding:14px;border:1px solid rgba(84,255,160,.1);border-radius:10px;background:rgba(2,5,3,.7)}
+.log-entry{font-family:'IBM Plex Mono',monospace;font-size:12px;padding:7px 5px;border-bottom:1px solid rgba(84,255,160,.07);color:#b8cbbf}
+.log-time{color:#51665a;margin-right:8px;font-size:11px}.log-key{font-weight:700;color:var(--green)}.log-down{color:#7bffb2;font-weight:700}.log-up{color:#ff7189}
+
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:#050806}
+::-webkit-scrollbar-thumb{background:#173021;border:2px solid #050806;border-radius:10px}
+::-webkit-scrollbar-thumb:hover{background:#245339}
+
+@media (max-width:780px){
+  .wrap{padding:18px 12px 40px}
+  .wrap>h1::after{display:none}
+  input,select{min-width:100%;width:100%}
+  button{flex:1}
+  .metrics{grid-template-columns:repeat(2,1fr)}
+  .screen-wrap{min-height:280px}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
-    <h1>EmpresaMonitor V3 — Turbo Pro</h1>
+    <h1>KL TOCHIQUE</h1>
     
     <div class="top">
         <div class="row">
