@@ -34,7 +34,7 @@ body{
     linear-gradient(rgba(84,255,160,.025) 1px, transparent 1px),
     linear-gradient(90deg, rgba(84,255,160,.025) 1px, transparent 1px),
     var(--bg);
-  background-size:auto,auto,34px 34px,34px 34px,auto;
+  background-size:auto,34px 34px,34px 34px,auto;
   overflow-x:hidden;
 }
 
@@ -149,7 +149,7 @@ button:active{transform:translateY(0)}
   box-shadow:inset 0 0 40px rgba(0,0,0,.7),0 0 35px rgba(84,255,160,.035);
 }
 .screen-wrap::before{content:"LIVE FEED";position:absolute;top:12px;left:12px;z-index:2;padding:5px 8px;border-radius:6px;background:rgba(0,0,0,.65);border:1px solid rgba(84,255,160,.18);color:var(--green);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1.5px;pointer-events:none}
-canvas{display:block;max-width:100%;height:auto;outline:none}
+canvas{display:block;max-width:100%;height:auto;outline:none;cursor: crosshair;}
 
 .metrics{margin-top:10px;display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px}
 .metrics span{padding:9px 10px;background:#07100b;border:1px solid rgba(84,255,160,.1);border-radius:8px;color:#9bb8a5;font:500 11px 'IBM Plex Mono',monospace}
@@ -206,7 +206,7 @@ canvas{display:block;max-width:100%;height:auto;outline:none}
     <div id="agents"></div>
 
     <div class="viewer">
-        <h2 id="viewTitle">Tela ao vivo</h2>
+        <h2>Tela ao vivo</h2>
         <div class="toolbar row">
             <label>Perfil:</label>
             <select id="profile">
@@ -229,142 +229,4 @@ canvas{display:block;max-width:100%;height:auto;outline:none}
             <span id="fps">FPS: 0</span>
             <span id="bitrate">Recebimento: 0 Mbps</span>
             <span id="frames">Frames: 0</span>
-            <span id="drops">Frames pulados: 0</span>
-        </div>
-
-        <div id="advancedControls" class="advanced-section" style="display:none;">
-            <h3>Controle de Sistema</h3>
-            <div class="row">
-                <button id="btnLockInput" class="lock-btn">🔒 Bloquear Teclado/Mouse</button>
-                <button id="btnUnlockInput" style="display:none;">🔓 Desbloquear</button>
-                <span id="lockStatus" class="small">Status: Desbloqueado</span>
-            </div>
-
-            <div class="shell-section">
-                <h4 style="margin-bottom:5px;">Terminal Remoto (Shell)</h4>
-                <div class="shell-input-group">
-                    <input id="shellCommand" placeholder="Digite o comando (ex: dir, ipconfig, whoami)...">
-                    <button id="btnExecuteShell">Enviar</button>
-                </div>
-                <div id="shellOutput" class="terminal-box">Aguardando comando...</div>
-            </div>
-        </div>
-
-        <div class="keylog-container" id="keylogContainer">
-            <h3 style="margin-top:0">Console de Eventos (Keylogger)</h3>
-            <div id="keylogList"></div>
-        </div>
-    </div>
-</div>
-
-<script>
-// --- VARIÁVEIS E CONFIGURAÇÃO ---
-const wsUrlEl=document.getElementById('wsUrl'),tokenEl=document.getElementById('token'),connectBtn=document.getElementById('connectBtn'),connStatus=document.getElementById('connStatus'),agentsEl=document.getElementById('agents'),canvas=document.getElementById('screen'),ctx=canvas.getContext('2d',{alpha:false}),fpsEl=document.getElementById('fps'),bitrateEl=document.getElementById('bitrate'),framesEl=document.getElementById('frames'),dropsEl=document.getElementById('drops'),profileEl=document.getElementById('profile'),applyProfile=document.getElementById('applyProfile'),controlBanner=document.getElementById('controlBanner'),screenWrap=document.getElementById('screenWrap'),keylogList=document.getElementById('keylogList');
-
-const advancedControls=document.getElementById('advancedControls'),btnLockInput=document.getElementById('btnLockInput'),btnUnlockInput=document.getElementById('btnUnlockInput'),lockStatusText=document.getElementById('lockStatus'),shellCommandInput=document.getElementById('shellCommand'),btnExecuteShell=document.getElementById('btnExecuteShell'),shellOutput=document.getElementById('shellOutput');
-
-let ws=null,agents=[],selectedAgentId=null,frames=0,fpsFrames=0,lastFps=performance.now(),bytesSecond=0,dropped=0,decoding=false,pendingFrame=null;
-
-wsUrlEl.value=localStorage.getItem('em_ws')||'';tokenEl.value=localStorage.getItem('em_admin')||'';profileEl.value=localStorage.getItem('em_profile')||'balanced';
-
-function setStatus(t,c=''){connStatus.textContent=t;connStatus.className='status '+c}
-function send(o){if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify(o))}
-
-function esc(v=''){return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')}
-
-// --- MÓDULO DE KEYLOG ---
-function addKeylogEntry(key, down, ts) {
-    const entry = document.createElement('div');
-    entry.className = 'log-entry';
-    const statusClass = down ? 'log-down' : 'log-up';
-    const statusText = down ? 'PRESSIONADA' : 'SOLTA';
-    entry.innerHTML = `<span class="log-time">[${ts}]</span> <span class="log-key">${esc(key)}</span> <span class="${statusClass}">${statusText}</span>`;
-    keylogList.prepend(entry); 
-    if (keylogList.childNodes.length > 50) keylogList.lastChild.remove(); 
-}
-
-// --- LÓGICA DE AGENTES E CONTROLE ---
-function renderAgents(){
-    agentsEl.innerHTML=agents.map(a=>`<div class="card"><div class="agent-title">${esc(a.name)} — ${esc(a.user)}</div><div class="small">${esc(a.id)} ${a.version?`· <span class="badge">${esc(a.version)}</span>`:''}</div><br><div>${a.accessActive?'🟢 acesso ativo':'⚪ conectado'} · ${a.controlActive?'🔴 controle ativo':'controle inativo'} · espectadores: ${a.watchers??0}</div><br><button onclick="requestAccess('${a.id}')">Solicitar acesso</button> <button onclick="watchAgent('${a.id}')">Ver ao vivo</button> <button onclick="requestControl('${a.id}')">Solicitar controle</button> <button onclick="endControl('${a.id}')">Encerrar controle</button> <button onclick="endAccess('${a.id}')">Encerrar tudo</button></div>`).join('');
-    const s=agents.find(a=>a.id===selectedAgentId);
-    controlBanner.className='control-banner'+(s?.controlActive?' active':'');
-    advancedControls.style.display = s ? 'block' : 'none';
-}
-
-window.requestAccess=id=>send({type:'request_access',agentId:id});
-window.watchAgent=id=>{selectedAgentId=id;send({type:'watch',agentId:id});setProfile(id)};
-window.requestControl=id=>{selectedAgentId=id;send({type:'watch',agentId:id});setProfile(id);setTimeout(()=>send({type:'request_control',agentId:id}),80)};
-window.endControl=id=>send({type:'end_control',agentId:id});
-window.endAccess=id=>send({type:'end_access',agentId:id});
-
-function setProfile(id=selectedAgentId){if(!id)return;const p=profileEl.value;localStorage.setItem('em_profile',p);send({type:'set_profile',agentId:id,profile:p})}
-applyProfile.onclick=()=>setProfile();
-document.getElementById('fullBtn').onclick=() => screenWrap.requestFullscreen?.();
-
-// --- CONTROLE AVANÇADO: LOCK & SHELL ---
-btnLockInput.onclick = () => {
-    if(!selectedAgentId) return;
-    send({type: 'input_lock', agentId: selectedAgentId, active: true});
-};
-
-btnUnlockInput.onclick = () => {
-    if(!selectedAgentId) return;
-    send({type: 'input_lock', agentId: selectedAgentId, active: false});
-};
-
-btnExecuteShell.onclick = () => {
-    const cmd = shellCommandInput.value.trim();
-    if(!cmd || !selectedAgentId) return;
-    shellOutput.textContent = `> Enviando: ${cmd}\n`;
-    send({type: 'shell_cmd', agentId: selectedAgentId, cmd: cmd});
-    shellCommandInput.value = '';
-};
-
-// --- CONEXÃO E MENSAGENS ---
-connectBtn.onclick=()=>{const url=wsUrlEl.value.trim(),token=tokenEl.value;localStorage.setItem('em_ws',url);localStorage.setItem('em_admin',token);try{ws?.close()}catch{}setStatus('Conectando...','wait');try{ws=new WebSocket(url);ws.binaryType='arraybuffer'}catch{setStatus('URL inválida','bad');return}ws.onopen=()=>send({type:'admin_hello',token});ws.onmessage=ev=>{
-    if(typeof ev.data==='string'){
-        let m;try{m=JSON.parse(ev.data)}catch{return}
-        if(m.type==='error'){setStatus(m.message||'Erro','bad');return}
-        if(m.type==='admin_ready'){setStatus('Conectado','ok');agents=m.agents||[];renderAgents();return}
-        if(m.type==='agent_list'){agents=m.agents||[];renderAgents();return}
-        
-        if(m.type === 'keylog') {
-            addKeylogEntry(m.key, m.down, m.ts || new Date().toLocaleTimeString());
-            return;
-        }
-        if(m.type === 'lock_ack' || m.type === 'lock_timeout') {
-            const isLocked = m.status === true;
-            btnLockInput.style.display = isLocked ? 'none' : 'inline-block';
-            btnUnlockInput.style.display = isLocked ? 'inline-block' : 'none';
-            lockStatusText.textContent = isLocked ? 'Status: BLOQUEADO' : 'Status: Desbloqueado';
-            lockStatusText.className = isLocked ? 'status bad' : 'status ok';
-            return;
-        }
-        if(m.type === 'shell_result') {
-            shellOutput.textContent += `\n[RESPOSTA]:\n${m.output}\n`;
-            shellOutput.scrollTop = shellOutput.scrollHeight;
-            return;
-        }
-        return;
-    }
-    bytesSecond+=ev.data.byteLength||0;queueFrame(ev.data);
-};
-ws.onclose=()=>setStatus('Desconectado','bad');ws.onerror=()=>setStatus('Erro de conexão','bad')};
-
-// --- VÍDEO (RENDERIZAÇÃO) ---
-function queueFrame(buf){if(decoding){pendingFrame=buf;dropped++;dropsEl.textContent='Frames pulados no navegador: '+dropped;return}decodeFrame(buf)}
-async function decodeFrame(buf){decoding=true;try{const bmp=await createImageBitmap(new Blob([buf],{type:'image/jpeg'}));if(canvas.width!==bmp.width||canvas.height!==bmp.height){canvas.width=bmp.width;canvas.height=bmp.height}ctx.drawImage(bmp,0,0);bmp.close();frames++;fpsFrames++;framesEl.textContent='Frames: '+frames}catch{}finally{decoding=false;if(pendingFrame){const next=pendingFrame;pendingFrame=null;decodeFrame(next)}}}
-
-setInterval(()=>{
-    const now=performance.now();
-    const fps=fpsFrames*1000/(now-lastFps);
-    fpsEl.textContent='FPS: '+fps.toFixed(1);
-    bitrateEl.textContent='Recebimento: '+(bytesSecond*8/1000000).toFixed(2)+' Mbps';
-    fpsFrames=0;
-    bytesSecond=0;
-    lastFps=now;
-}, 1000);
-
-</script>
-</body>
-</html>
+            <span id="drops">
