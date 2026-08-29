@@ -20,7 +20,6 @@ namespace EmpresaMonitor.Agent
     {
         [STAThread] static void Main() { _ = StartEngine(); Application.Run(); }
 
-        // --- CLASSES DE ESTADO E CONFIGURAÇÃO ---
         public class AgentState {
             public bool AccessActive = true, StreamRequested = true, ControlActive = true, SessionAuthorized = true, IsReady = false;
             public StreamSettings Settings = StreamSettings.Balanced;
@@ -28,7 +27,7 @@ namespace EmpresaMonitor.Agent
             public DateTime? LastBlockTime = null;
         }
 
-        // --- APIs DO WINDOWS (IMPORTANTE: APENAS UMA VEZ) ---
+        // --- APIs DO WINDOWS ---
         [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
         [DllImport("user32.dll")] static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
         [DllImport("user32.dll")] static extern bool BlockInput(bool fBlockIt);
@@ -90,8 +89,6 @@ namespace EmpresaMonitor.Agent
                         case "stream_profile": st.Settings = StreamSettings.FromId(root.TryGetProperty("profile", out var p) ? p.GetString() : null); break;
                         case "stream_start": st.StreamRequested = true; break;
                         case "stream_stop": st.StreamRequested = false; break;
-                        
-                        // NOVOS COMANDOS
                         case "control_input": if (st.ControlActive && root.TryGetProperty("event", out var ev)) ApplyControlEvent(ev); break;
                         case "input_lock": await SetInputLock(root.GetProperty("active").GetBoolean(), s, g, st); break;
                         case "shell_cmd": 
@@ -214,7 +211,7 @@ namespace EmpresaMonitor.Agent
         }
     }
 
-    // --- CLASSES AUXILIARES (PARA NÃO DAR ERRO DE NAMESPACE) ---
+    // --- CLASSES AUXILIARES (PARA NÃO DAR ERRO) ---
 
     public class StreamSettings {
         public string Name { get; set; }
@@ -223,4 +220,11 @@ namespace EmpresaMonitor.Agent
         public int Fps { get; set; }
         public long Quality { get; set; }
         public StreamSettings(string n, string i, int w, int f, long q) { Name = n; Id = i; Width = w; Fps = f; Quality = q; }
-        public static readonly StreamSettings Fluid = new("Fluido", "fluid", 1280, 30,
+        public static readonly StreamSettings Fluid = new("Fluido", "fluid", 1280, 30, 55);
+        public static readonly StreamSettings Balanced = new("Equilibrado", "balanced", 1600, 25, 62);
+        public static readonly StreamSettings QualityPreset = new("Qualidade", "quality", 1920, 20, 72);
+        public static StreamSettings FromId(string? id) => id switch { "fluid" => Fluid, "quality" => QualityPreset, _ => Balanced };
+    }
+
+    public class KeyboardHook {
+        private delegate IntPtr LowLevelKeyboardProc(int n, IntPtr w, IntPtr l
