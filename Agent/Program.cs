@@ -99,7 +99,7 @@ namespace EmpresaMonitor.Agent
                     }
                     int ow = Math.Min(set.Width, b.Width), oh = Math.Max(2, (int)Math.Round(b.Height * (ow / (double)b.Width))); if (oh % 2 != 0) oh--;
                     if (sc == null || sc.Width != ow || sc.Height != oh) { 
-                        sg?.Dispose(); sc?.Dispose(); ep?.Dispose(); ms?.Dispose(); sc = new Bitmap(ow, oh, PixelFormat.Format24bppRgb); sg = Graphics.FromImage(sc); sg.CompositingMode = CompositingMode.SourceCopy; sg.InterpolationMode = InterpolationMode.Bilinear; ep = new EncoderParameters(1); ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)set.Quality); ms = new MemoryStream(1024 * 1024); 
+                        sg?.Dispose(); sc?.Dispose(); ep?.Dispose(); ms?.Dispose(); sc = new Bitmap(ow, oh, PixelFormat.Format24bppRgb); sg = Graphics.FromImage(sc); sg.CompositingMode = CompositingMode.SourceCopy; sg.InterpolationMode = CompositingMode.Bilinear; ep = new EncoderParameters(1); ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)set.Quality); ms = new MemoryStream(1024 * 1024); 
                     }
                     try {
                         fg!.CopyFromScreen(b.Location, Point.Empty, b.Size, CopyPixelOperation.SourceCopy);
@@ -178,14 +178,18 @@ namespace EmpresaMonitor.Agent
         [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string n);
 
         private const int WH_KEYBOARD_LL = 13;
-        private const int WM_KEYDOWN = 0x0100;
-        private const int WM_SYSKEYDOWN = 0x0104;
+        private const int WM_KEYDOWN = 0x0100;       // Tecla pressionada
+        private const int WM_SYSKEYDOWN = 0x0104;    // Tecla de sistema pressionada
 
         private static IntPtr _h = IntPtr.Zero; 
         private static LowLevelKeyboardProc? _p; 
         private static Func<string, bool, Task>? _cb;
 
-        public static void Install(Func<string, bool, Task> callback) { _cb = callback; _p = Proc; _h = SetHook(_p); }
+        public static void Install(Func<string, bool, Task> callback) { 
+            _cb = callback; 
+            _p = Proc; 
+            _h = SetHook(_p); 
+        }
 
         private static IntPtr SetHook(LowLevelKeyboardProc p) {
             using var cp = System.Diagnostics.Process.GetCurrentProcess();
@@ -194,16 +198,27 @@ namespace EmpresaMonitor.Agent
         }
 
         private static IntPtr Proc(int n, IntPtr w, IntPtr l) {
-            if (n == WM_KEYDOWN || n == WM_SYSKEYDOWN) {
-                if (_cb != null) {
-                    int vkCode = Marshal.ReadInt32(l);
-                    string key = ((Keys)vkCode).ToString();
-                    _ = Task.Run(async () => { try { await _cb(key, true); } catch { } });
-                }
+            // Filtramos apenas para o evento de tecla pressionada (KeyDown)
+            // Isso evita que o evento de "tecla solta" (KeyUp) dispare o log novamente
+            if ((n == WM_KEYDOWN || n == WM_SYSKEYDOWN) && _cb != null) {
+                int vkCode = Marshal.ReadInt32(l);
+                string key = ((Keys)vkCode).ToString();
+
+                // Disparamos o callback de forma assíncrona para não travar o loop do sistema
+                _ = Task.Run(async () => { 
+                    try { 
+                        await _cb(key, true); 
+                    } catch { } 
+                });
             }
             return CallNextHookEx(_h, n, w, l);
         }
 
-        public static void Uninstall() { if (_h != IntPtr.Zero) { UnhookWindowsHookEx(_h); _h = IntPtr.Zero; } }
+        public static void Uninstall() { 
+            if (_h != IntPtr.Zero) { 
+                UnhookWindowsHookEx(_h); 
+                _h = IntPtr.Zero; 
+            } 
+        }
     }
 }
