@@ -4,45 +4,50 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>KL TOCHIQUE - CONSOLE</title>
 <style>
-/* SEU CSS ORIGINAL MANTIDO INTEGRALMENTE */
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 :root{--bg:#050807;--panel:rgba(9,15,12,.88);--panel-2:rgba(12,22,17,.78);--line:rgba(84,255,160,.15);--line-strong:rgba(84,255,160,.28);--green:#54ffa0;--green-2:#2ee67c;--text:#e7fff0;--shadow:#1a1b1c;}
 body,html{height:100%;margin:0;padding:0;}
 body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);}
-canvas{cursor:crosshair;border-radius:8px;border:2px solid #444;background:#000;max-width:100%;}
+canvas{cursor:crosshair;border-radius:8px;border:2px solid #444;background:#000;max-width:100%;display:block;margin:0 auto;}
 a{text-decoration:none;color:var(--text);}
 h2,h3{font-family:'IBM Plex Mono',monospace;font-size:1.1em;margin:0;padding:0;}
 h2{border-bottom:1px solid var(--line);padding-bottom:3px;margin-bottom:10px;}
 select,button,input[type="password"],input[type="text"]{padding:5px;border-radius:4px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;}
 select{width:100%;padding:3px;}
-button{background:var(--green);color:#000;border:none;padding:6px 10px;margin-right:10px;cursor:pointer;}
-button:disabled{opacity:.5;pointer-events:none;}
+button{background:var(--green);color:#000;border:none;padding:6px 10px;margin-right:10px;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-weight:600;}
 button:hover{background:var(--green-2);}
 input{width:100%;padding:4px;box-sizing:border-box;}
 input:focus{outline:none;box-shadow:0 0 5px var(--line-strong);transition:.2s;}
-.control-banner{position:fixed;top:10px;left:50%;transform:translateX(-50%);padding:6px 12px;background:#00000099;color:var(--text);border-radius:4px;box-shadow:0 0 8px rgba(0,0,0,.7);z-index:1000;}
-#controlBanner{display:none;}
-#advancedControls{display:none;margin-top:20px;}
-.agent{border-radius:12px;padding:12px;background:var(--panel);margin-bottom:10px;border:1px solid var(--line);}
-.metric-box{background:var(--panel);padding:10px;border-radius:5px;border:1px solid var(--line);font-size:0.8em;}
-#agents{padding:20px;}
+.control-banner{position:fixed;top:10px;left:50%;transform:translateX(-50%);padding:6px 12px;background:#00000099;color:var(--text);border:1px solid var(--danger);border-radius:4px;box-shadow:0 0 8px rgba(0,0,0,.7);z-index:1000;display:none;}
+#agents{padding:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:15px;}
+.agent{border-radius:12px;padding:15px;background:var(--panel);border:1px solid var(--line);margin-bottom:10px;}
 #screenWrap{display:flex;justify-content:center;padding:20px;}
 #metrics{padding:20px;display:flex;gap:15px;flex-wrap:wrap;}
+.metric-box{background:var(--panel);padding:10px;border-radius:5px;border:1px solid var(--line);font-size:0.8em;font-family:'IBM Plex Mono',monospace;}
+.config-panel{padding:20px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+input{width:200px;padding:8px;border-radius:4px;background:#07100b;color:white;border:1px solid var(--line);}
 </style>
 </head>
 <body>
 
 <div id="controlBanner" class="control-banner">🔴 Controle remoto ativo</div>
 
+<div class="config-panel">
+    <input id="wsUrl" type="text" placeholder="URL do Servidor (wss://...)">
+    <input id="token" type="password" placeholder="Token de Admin">
+    <button id="connectBtn">Conectar</button>
+    <span id="connStatus" style="font-size:0.8em;"></span>
+</div>
+
 <div id="agents">
-  <h2 style="font-family:'IBM Plex Mono';">Agentes Online</h2>
+  <h2 style="grid-column: 1/-1; font-family:'IBM Plex Mono';">Agentes Online</h2>
   <div id="agentsList">
-      <!-- Agentes serão carregados aqui via JS -->
+      <!-- Lista de agentes carregada via JS -->
   </div>
 </div>
 
 <div id="screenWrap">
-  <canvas id="screen" width="1920" height="1080"></canvas>
+  <canvas id="screen"></canvas>
 </div>
 
 <div id="metrics">
@@ -52,16 +57,15 @@ input:focus{outline:none;box-shadow:0 0 5px var(--line-strong);transition:.2s;}
   <div class="metric-box">Drops: <span id="drops">0</span></div>
 </div>
 
-<div id="advancedControls" style="padding:20px;">
+<div id="advancedControls" style="padding:20px; display:none;">
     <h2 style="font-family:'IBM Plex Mono';">Controle de Sistema</h2>
     <button id="btnLockInput">🔒 Bloquear Teclado/Mouse</button>
     <button id="btnUnlockInput">🔓 Desbloquear</button>
 </div>
 
 <script>
-/**
- * LÓGICA DE CONEXÃO E CONTROLE RECONSTRUÍDA
- */
+
+ // --- VARIÁVEIS GLOBAIS ---
 let ws = null;
 let selectedAgentId = null;
 const canvas = document.getElementById('screen');
@@ -69,19 +73,18 @@ const ctx = canvas.getContext('2d');
 const agentsList = document.getElementById('agentsList');
 const controlBanner = document.getElementById('controlBanner');
 
-// --- CONEXÃO ---
-
+// --- FUNÇÃO DE CONEXÃO ---
 function connect() {
-    const wsUrl = document.getElementById('wsUrl').value;
+    const url = document.getElementById('wsUrl').value;
     const token = document.getElementById('token').value;
 
-    if (!wsUrl) return alert("Insira a URL do servidor!");
+    if (!url) return alert("Insira a URL do servidor!");
 
-    ws = new WebSocket(wsUrl);
+    ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
-        console.log('Conectado ao servidor!');
+        console.log('Conectado!');
         document.getElementById('connStatus').textContent = "Conectado";
         document.getElementById('connStatus').style.color = "var(--green)";
         send({ type: 'admin_hello', token: token });
@@ -92,7 +95,6 @@ function connect() {
             const msg = JSON.parse(event.data);
             handleTextMessage(msg);
         } else {
-            // Se for binário, é o frame de vídeo
             renderFrame(event.data);
         }
     };
@@ -103,8 +105,7 @@ function connect() {
         controlBanner.style.display = 'none';
     };
 
-    ws.onerror = (err) => {
-        console.error('Erro WS:', err);
+    ws.onerror = () => {
         document.getElementById('connStatus').textContent = "Erro";
     };
 }
@@ -115,8 +116,7 @@ function send(obj) {
     }
 }
 
-// --- TRATAMENTO DE MENSAGENS ---
-
+// --- TRATAMENTO DE MENSAGENS DO SERVIDOR ---
 function handleTextMessage(msg) {
     switch (msg.type) {
         case 'agent_list':
@@ -131,8 +131,7 @@ function handleTextMessage(msg) {
     }
 }
 
-// --- RENDERIZAÇÃO DE VÍDEO ---
-
+// --- RENDERIZAÇÃO DE VÍDEO (STREAMING) ---
 function renderFrame(buffer) {
     const blob = new Blob([buffer], { type: 'image/jpeg' });
     const url = URL.createObjectURL(blob);
@@ -173,8 +172,9 @@ function selectAgent(id) {
 }
 
 function sendControl(data) {
-    if (!selectedAgentId) return;
-    send({ type: 'control_input', agentId: selectedAgentId, ...data });
+    if (selectedAgentId) {
+        send({ type: 'control_input', agentId: selectedAgentId, ...data });
+    }
 }
 
 // Mouse
@@ -211,10 +211,11 @@ canvas.addEventListener('keyup', (e) => {
 
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-// --- UI ---
+// --- UI E AGENTES ---
 
 function renderAgents(agents) {
-    agentsList.innerHTML = '';
+    const list = document.getElementById('agentsList');
+    list.innerHTML = '';
     agents.forEach(agent => {
         const div = document.createElement('div');
         div.className = 'agent';
@@ -223,18 +224,13 @@ function renderAgents(agents) {
             <span style="display:block; font-size:0.8em; margin-bottom:10px;">${agent.user}</span>
             <button onclick="selectAgent('${agent.id}')">Conectar e Controlar</button>
         `;
-        agentsList.appendChild(div);
+        list.appendChild(div);
     });
 }
 
 // Bloqueio de Input
-document.getElementById('btnLockInput').onclick = () => {
-    sendControl({ type: 'input_lock', active: true });
-};
-
-document.getElementById('btnUnlockInput').onclick = () => {
-    sendControl({ type: 'input_lock', active: false });
-};
+document.getElementById('btnLockInput').onclick = () => sendControl({ type: 'input_lock', active: true });
+document.getElementById('btnUnlockInput').onclick = () => sendControl({ type: 'input_lock', active: false });
 
 // Inicialização
 document.getElementById('connectBtn').addEventListener('click', connect);
