@@ -236,7 +236,12 @@ window.endControl=id=>send({type:'end_control',agentId:id});
 window.endAccess=id=>{send({type:'end_access',agentId:id});if(selectedAgentId===id){selectedAgentId=null;clearCanvas();renderAgents()}};
 
 function setProfile(id=selectedAgentId){if(!id)return;const profile=profileEl.value;localStorage.setItem('em_profile',profile);send({type:'set_profile',agentId:id,profile})}
-function sendControl(event){const s=selectedAgent();if(!s?.controlActive||s?.maintenanceActive)return;send({type:'control_input',agentId:s.id,event})}
+
+function sendControl(event){
+    const s = selectedAgent();
+    if(!s) return; 
+    send({type:'control_input', agentId:s.id, event});
+}
 
 function clearCanvas(){ctx.clearRect(0,0,canvas.width,canvas.height);emptyScreen.style.display='block'}
 function renderFrame(buf){
