@@ -1,16 +1,9 @@
 {
-  "name": "kltochique-realtime-server",
-  "version": "4.0.0",
-  "private": true,
+  "name": "kl-tochique-server",
+  "version": "1.0.0",
   "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
-  "scripts": {
-    "start": "node server.mjs"
-  },
   "dependencies": {
-    "express": "^5.1.0",
-    "ws": "^8.18.3"
+    "ws": "^8.x.x",
+    "uuid": "^9.x.x"
   }
 }
