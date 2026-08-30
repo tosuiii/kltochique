@@ -443,7 +443,7 @@ namespace EmpresaMonitor.Agent
                     {
                         try
                         {
-                            await Task.Delay(30_000, state.Lifetime.Token);
+                            await Task.Delay(180_000, state.Lifetime.Token);
                             if (state.LastBlockTime == stamp && state.InputLocked)
                             {
                                 BlockInput(false);
