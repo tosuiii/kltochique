@@ -121,10 +121,11 @@ function connect() {
 
 function setStatus(t,c=''){ connStatus.textContent=t; connStatus.className='status '+c; }
 function send(o){ if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify(o)); }
+function esc(v=''){ return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('\"','&quot;').replaceAll("'",'&#039;'); }
 
 function handleMessage(m) {
     switch(m.type) {
-        case 'agent_list': agents = m.agents || []; renderAgents(agents); break;
+        case 'agent_list': agents = m.agents || []; renderAgents(); break;
         case 'metrics': updateMetrics(m); break;
         case 'keylog': addKeylogEntry(m.key, m.down, m.ts); break;
         case 'shell_result': shellOutput.textContent += `\n[RES]: ${m.output}\n`; break;
@@ -220,21 +221,70 @@ canvas.addEventListener('keyup', (e) => {
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 // --- UI E AGENTES ---
-function renderAgents(agents) {
-    agentsEl.innerHTML = '';
-    agents.forEach(agent => {
-        const div = document.createElement('div');
-        div.className = 'card';
-        div.innerHTML = `
-            <div class="agent-title">${agent.name}</div>
-            <div class="small">${agent.user}</div>
-            <div class="small" style="margin-top:5px; color:var(--green)">${agent.id}</div>
-            <div style="margin-top:10px;">
-                <button onclick="selectAgent('${agent.id}')">Conectar e Controlar</button>
+function renderAgents() {
+    agentsEl.innerHTML = agents.map(a => `
+        <div class="card">
+            <div class="agent-title">${esc(a.name)} — ${esc(a.user)}</div>
+            <div class="small">
+                ${esc(a.id)} ${a.version ? `· <span class="badge">${esc(a.version)}</span>` : ''}
             </div>
-        `;
-        agentsEl.appendChild(div);
-    });
+
+            <div style="margin-top:10px;" class="small">
+                ${a.accessActive ? '🟢 acesso ativo' : '⚪ conectado'} ·
+                ${a.controlActive ? '🔴 controle ativo' : 'controle inativo'} ·
+                espectadores: ${a.watchers ?? 0}
+            </div>
+
+            <div class="row" style="margin-top:12px;">
+                <button onclick="requestAccess('${a.id}')">Solicitar acesso</button>
+                <button onclick="watchAgent('${a.id}')">Ver ao vivo</button>
+                <button onclick="requestControl('${a.id}')">Solicitar controle</button>
+                <button onclick="endControl('${a.id}')">Encerrar controle</button>
+                <button onclick="endAccess('${a.id}')">Encerrar tudo</button>
+            </div>
+        </div>
+    `).join('');
+
+    const s = agents.find(a => a.id === selectedAgentId);
+    controlBanner.style.display = s?.controlActive ? 'block' : 'none';
+    advancedControls.style.display = s ? 'block' : 'none';
+}
+
+window.requestAccess = id => send({ type: 'request_access', agentId: id });
+
+window.watchAgent = id => {
+    selectedAgentId = id;
+    send({ type: 'watch', agentId: id });
+    setProfile(id);
+    renderAgents();
+};
+
+window.requestControl = id => {
+    selectedAgentId = id;
+    send({ type: 'watch', agentId: id });
+    setProfile(id);
+    setTimeout(() => send({ type: 'request_control', agentId: id }), 80);
+    advancedControls.style.display = 'block';
+};
+
+window.endControl = id => {
+    send({ type: 'end_control', agentId: id });
+};
+
+window.endAccess = id => {
+    send({ type: 'end_access', agentId: id });
+    if (selectedAgentId === id) {
+        selectedAgentId = null;
+        controlBanner.style.display = 'none';
+        advancedControls.style.display = 'none';
+    }
+};
+
+function setProfile(id = selectedAgentId) {
+    if (!id) return;
+    const p = profileEl.value;
+    localStorage.setItem('em_profile', p);
+    send({ type: 'set_profile', agentId: id, profile: p });
 }
 
 // Bloqueio de Input
@@ -253,12 +303,8 @@ document.getElementById('btnExecuteShell').onclick = () => {
 
 // Inicialização
 connectBtn.addEventListener('click', connect);
-applyProfile.onclick = () => {
-    const p = profileEl.value;
-    localStorage.setItem('em_profile', p);
-    send({ type: 'set_profile', agentId: selectedAgentId, profile: p });
-};
-document.getElementById('fullBtn').onclick = () => canvas.requestFullscreen?.();
+applyProfile.onclick = () => setProfile();
+document.getElementById('fullBtn').onclick = () => screenWrap.requestFullscreen?.();
 
 // --- FINALIZAÇÃO ---
 
