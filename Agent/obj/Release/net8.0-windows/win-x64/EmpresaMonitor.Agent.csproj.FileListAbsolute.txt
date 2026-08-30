@@ -1,4 +1,0 @@
-C:\Users\Guilherme\Downloads\KLTOCHIQUE_V4_2_1_SESSAO_UNICA\KLTOCHIQUE\Agent\obj\Release\net8.0-windows\win-x64\EmpresaMonitor.Agent.GeneratedMSBuildEditorConfig.editorconfig
-C:\Users\Guilherme\Downloads\KLTOCHIQUE_V4_2_1_SESSAO_UNICA\KLTOCHIQUE\Agent\obj\Release\net8.0-windows\win-x64\EmpresaMonitor.Agent.AssemblyInfoInputs.cache
-C:\Users\Guilherme\Downloads\KLTOCHIQUE_V4_2_1_SESSAO_UNICA\KLTOCHIQUE\Agent\obj\Release\net8.0-windows\win-x64\EmpresaMonitor.Agent.AssemblyInfo.cs
-C:\Users\Guilherme\Downloads\KLTOCHIQUE_V4_2_1_SESSAO_UNICA\KLTOCHIQUE\Agent\obj\Release\net8.0-windows\win-x64\EmpresaMonitor.Agent.csproj.CoreCompileInputs.cache
