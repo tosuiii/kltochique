@@ -1888,20 +1888,20 @@ namespace EmpresaMonitor.Agent
         // Overlay não deve roubar o foco do usuário local.
         protected override bool ShowWithoutActivation => true;
 
-        protected override CreateParams CreateParams
-        {
-            get
-            {
-                var cp = base.CreateParams;
-                cp.ExStyle |= 0x20;          // WS_EX_TRANSPARENT — cliques (reais/injetados) atravessam p/ o desktop
-                cp.ExStyle |= 0x80000;       // WS_EX_LAYERED — garante que o WS_EX_TRANSPARENT seja
-                                             // honrado de forma confiável em tela cheia (hit-test da
-                                             // janela inteira fica transparente; alpha 255 = opaca)
-                cp.ExStyle |= 0x80;          // WS_EX_TOOLWINDOW — some do Alt+Tab
-                cp.ExStyle |= 0x08000000;    // WS_EX_NOACTIVATE — não ativa a janela
-                return cp;
-            }
-        }
+       protected override CreateParams CreateParams
+{
+    get
+    {
+        var cp = base.CreateParams;
+        // 0x08000000 (WS_EX_NOACTIVATE) - ESSENCIAL: Não rouba o foco
+        // 0x20 (WS_EX_TRANSPARENT) - ESSENCIAL: Cliques atravessam a janela
+        // 0x80 (WS_EX_TOOLWINDOW) - Remove da barra de tarefas/Alt-Tab
+        // 0x0001 (WS_EX_TOPMOST) - Garante que o overlay fique na frente do usuário
+        cp.ExStyle |= 0x08000000 | 0x20 | 0x80 | 0x0001; 
+        
+        return cp;
+    }
+}
 
         // WS_EX_LAYERED exige SetLayeredWindowAttributes para a janela ficar visível;
         // alpha 255 mantém a aparência opaca normal.
